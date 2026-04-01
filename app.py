@@ -1,4 +1,4 @@
-import streamlit as st
+    import streamlit as st
 from anthropic import AnthropicVertex
 
 # --- App Configuration ---
@@ -37,17 +37,15 @@ if prompt := st.chat_input("Ask Claude anything..."):
         full_response = ""
         
         try:
-            # We use the Messages API which is compatible with Claude 3.5/3.0 models
-            # Common models: "claude-3-5-sonnet-v2@20241022" or "claude-3-opus@20240229"
-            message = client.messages.create(
-                model="claude-3-5-sonnet@20240620", 
-                max_tokens=1024,
+          # Updated for the latest 4.6 model
+            response = client.messages.create(
+            model="claude-sonnet-4-6", # This is the Vertex AI model ID for Sonnet 4.6
+            max_tokens=2048,           # 4.6 handles longer outputs better
                 messages=[
                     {"role": m["role"], "content": m["content"]}
                     for m in st.session_state.messages
                 ]
             )
-            
             full_response = message.content[0].text
             response_placeholder.markdown(full_response)
             
