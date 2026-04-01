@@ -1,0 +1,3 @@
+streamlit
+anthropic[vertex]
+google-cloud-aiplatform
