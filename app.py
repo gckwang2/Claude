@@ -1,56 +1,49 @@
-    import streamlit as st
+import streamlit as st
+import json
+import os
 from anthropic import AnthropicVertex
 
-# --- App Configuration ---
-st.set_page_config(page_title="Claude Chatbot (Vertex AI)", layout="centered")
-st.title("💬 Claude on Vertex AI")
-
+# Ensure no spaces exist before the imports above
 # --- Setup Credentials ---
-# In Streamlit Cloud, go to Settings -> Secrets and add:
-# PROJECT_ID = "your-google-cloud-project-id"
-# REGION = "us-central1" (or your preferred region)
-PROJECT_ID = st.secrets.get("PROJECT_ID", "your-project-id")
+if "gcp_service_account" in st.secrets:
+    service_account_info = dict(st.secrets["gcp_service_account"])
+    with open("gcp_key.json", "w") as f:
+        json.dump(service_account_info, f)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
+
+PROJECT_ID = st.secrets.get("PROJECT_ID")
 REGION = st.secrets.get("REGION", "us-central1")
 
-# Initialize the Claude Client for Vertex AI
+# Initialize Claude 4.6
 client = AnthropicVertex(project_id=PROJECT_ID, region=REGION)
 
-# --- Session State for Chat History ---
+st.title("💬 Claude 4.6 Chatbot")
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display existing chat history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# --- Chat Input ---
-if prompt := st.chat_input("Ask Claude anything..."):
-    # 1. Display user message
+if prompt := st.chat_input("Ask Claude 4.6..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 2. Generate Claude response
     with st.chat_message("assistant"):
-        response_placeholder = st.empty()
-        full_response = ""
-        
         try:
-          # Updated for the latest 4.6 model
-            response = client.messages.create(
-            model="claude-sonnet-4-6", # This is the Vertex AI model ID for Sonnet 4.6
-            max_tokens=2048,           # 4.6 handles longer outputs better
+            # Using the 4.6 model ID
+            message = client.messages.create(
+                model="claude-sonnet-4-6", 
+                max_tokens=2048,
                 messages=[
                     {"role": m["role"], "content": m["content"]}
                     for m in st.session_state.messages
                 ]
             )
-            full_response = message.content[0].text
-            response_placeholder.markdown(full_response)
-            
+            response_text = message.content[0].text
+            st.markdown(response_text)
+            st.session_state.messages.append({"role": "assistant", "content": response_text})
         except Exception as e:
-            st.error(f"Error calling Vertex AI: {str(e)}")
-
-    # 3. Save assistant response to history
-    st.session_state.messages.append({"role": "assistant", "content": full_response})
+            st.error(f"Error: {e}")
