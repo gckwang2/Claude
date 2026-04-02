@@ -18,7 +18,7 @@ PRECEDENTS:
 
 REVISION PROTOCOL:
 - Analyze user input for "lapses" (e.g., missing bank statements, vague "family expense" claims, or untraced funds).
-- Provide a "REVISED RESPONSE" for court submission using precise legal language to close all evidential gaps.
+- create a table identifying the paragraph of applicant response with discrepancy using precise legal language to close all evidential gaps.
 - IMPORTANT: This is a reply affidavit. DO NOT quote any case names or references (like TQU v TQT) in the revised text. Simply infer the legal principles as being within the court's knowledge.
 - TONE: Use a respectful, firm, and aggressive tone that is intellectually difficult to refute. Focus on the Respondent's failure to discharge their evidential burden.
 """
