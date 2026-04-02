@@ -7,7 +7,7 @@ from google import genai
 from google.genai import types
 from pymilvus import connections, Collection, utility, FieldSchema, CollectionSchema, DataType
 
-# --- 1. GLOBAL PROMPT & CONFIG ---
+# --- 1. GLOBAL PROMPT (Updated for Reply Affidavit Protocol) ---
 LEGAL_PROMPT = """
 You are a Senior Legal Advisor specialized in Singapore Family Law. 
 GOAL: Help the user achieve a 75:25 asset division ratio for Auxiliary Matters (AM).
@@ -19,59 +19,40 @@ PRECEDENTS:
 REVISION PROTOCOL:
 - Analyze user input for "lapses" (e.g., missing bank statements, vague "family expense" claims, or untraced funds).
 - Provide a "REVISED RESPONSE" for court submission using precise legal language to close all evidential gaps.
-- Do not quote any case reference in the response, just infer to the court knowledge.
-- Use a non respectful tone, but firm and difficult to refute in revising the user reponse.
+- IMPORTANT: This is a reply affidavit. DO NOT quote any case names or references (like TQU v TQT) in the revised text. Simply infer the legal principles as being within the court's knowledge.
+- TONE: Use a non-respectful, firm, and aggressive tone that is intellectually difficult to refute. Focus on the Respondent's failure to discharge their evidential burden.
 """
 
+# --- 2. CONFIG & IDENTITY ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
 LOCATION = "global" 
 MODEL_ID = "gemini-3.1-pro-preview"
 EMBED_MODEL = "text-embedding-004"
-
-# --- 2. THE LOGIN GATE (Re-inserted) ---
-def check_password():
-    """Returns True if the user had the correct password."""
-    def password_entered():
-        if (
-            st.session_state["username"] in st.secrets["passwords"]
-            and st.session_state["password"]
-            == st.secrets["passwords"][st.session_state["username"]]
-        ):
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store password
-            del st.session_state["username"]
-        else:
-            st.session_state["password_correct"] = False
-
-    if "password_correct" not in st.session_state:
-        st.text_input("Username", on_change=None, key="username")
-        st.text_input("Password", type="password", on_change=None, key="password")
-        st.button("Log In", on_click=password_entered)
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("Username", on_change=None, key="username")
-        st.text_input("Password", type="password", on_change=None, key="password")
-        st.button("Log In", on_click=password_entered)
-        st.error("😕 User not known or password incorrect")
-        return False
-    else:
-        return True
-
-if not check_password():
-    st.stop()  # Do not run the rest of the app if not logged in
-
-# --- 3. PERSISTENT IDENTITY ---
-# We use the username or a fixed project ID to load the "Next Day" history
 USER_IDENTITY = "Freddy_Legal_Project_2026"
 
-# --- 4. AUTH & CLIENT ---
-if "gcp_service_account" in st.secrets:
-    with open("gcp_key.json", "w") as f:
-        json.dump(dict(st.secrets["gcp_service_account"]), f)
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
-client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
+# --- 3. LOGIN GATE ---
+def check_password():
+    if "passwords" not in st.secrets:
+        st.error("🚨 Configuration Error: '[passwords]' section missing in Secrets.")
+        return False
 
-# --- 5. ZILLIZ & UTILS ---
+    def password_entered():
+        if st.session_state["username"] in st.secrets["passwords"] and st.session_state["password"] == st.secrets["passwords"][st.session_state["username"]]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+            del st.session_state["username"]
+        else: st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.text_input("Username", key="username")
+        st.text_input("Password", type="password", key="password")
+        st.button("Log In", on_click=password_entered)
+        return False
+    return st.session_state["password_correct"]
+
+if not check_password(): st.stop()
+
+# --- 4. ZILLIZ & UTILS ---
 @st.cache_resource
 def init_zilliz():
     connections.connect(uri=st.secrets["ZILLIZ_URI"], token=st.secrets["ZILLIZ_TOKEN"])
@@ -86,8 +67,7 @@ def init_zilliz():
         ]
         col = Collection(col_name, CollectionSchema(fields))
         col.create_index("vector", {"metric_type": "L2", "index_type": "IVF_FLAT", "params": {"nlist": 128}})
-    else:
-        col = Collection(col_name)
+    else: col = Collection(col_name)
     col.load()
     return col
 
@@ -96,40 +76,48 @@ collection = init_zilliz()
 def clean_legal_text(text):
     if not text: return ""
     text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
-    text = text.replace("add−back", "add-back").replace("S$", "S$ ")
-    return text.replace("\n", "\n\n")
+    return text.replace("add−back", "add-back").replace("S$", "S$ ").replace("\n", "\n\n")
 
 def load_history(session_id):
     try:
         results = collection.query(expr=f'session_id == "{session_id}"', output_fields=["text", "role"])
-        return [{"role": r['role'], "content": r['text']} for r in sorted(results, key=lambda x: x['id'])]
+        return sorted(results, key=lambda x: x['id'])
     except: return []
 
-# --- 6. UI & SESSION HYDRATION ---
-st.set_page_config(page_title="Legal Advisor", layout="wide")
+# --- 5. UI SETUP ---
+st.set_page_config(page_title="Legal Strategist", layout="wide")
 st.title("⚖️ Principal Legal Advisor")
 
 if "messages" not in st.session_state:
-    with st.spinner("🔄 Restoring previous day's consultations..."):
-        st.session_state.messages = load_history(USER_IDENTITY)
+    raw_history = load_history(USER_IDENTITY)
+    # Group history into pairs (User + AI) for the single-window requirement
+    st.session_state.messages = []
+    temp_pair = {}
+    for item in raw_history:
+        if item['role'] == 'user':
+            temp_pair = {"user": item['text']}
+        elif item['role'] == 'assistant' and "user" in temp_pair:
+            temp_pair["assistant"] = item['text']
+            st.session_state.messages.append(temp_pair)
+            temp_pair = {}
 
-if st.session_state.messages:
-    with st.expander("📚 View Permanent Legal History", expanded=False):
-        for msg in st.session_state.messages:
-            st.markdown(f"**{msg['role'].upper()}:**\n{clean_legal_text(msg['content'])}")
-            st.markdown("---")
+# --- 6. DISPLAY HISTORY (Collapsible Windows) ---
+st.subheader("Consultation History")
+for i, entry in enumerate(st.session_state.messages):
+    with st.expander(f"📂 Interaction {i+1}: {entry['user'][:50]}...", expanded=False):
+        st.markdown("**👤 Your Query:**")
+        st.write(entry['user'])
+        st.markdown("---")
+        st.markdown("**⚖️ Advisor Strategy:**")
+        st.markdown(clean_legal_text(entry['assistant']))
 
-# --- 7. CHAT ENGINE ---
-if prompt := st.chat_input("Submit your draft for revision..."):
-    user_emb = client.models.embed_content(model=EMBED_MODEL, contents=prompt)
-    collection.insert([[user_emb.embeddings[0].values], [prompt], [USER_IDENTITY], ["user"]])
-    
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+# --- 7. CURRENT INTERACTION ---
+client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
+if prompt := st.chat_input("Enter your reply affidavit draft..."):
+    # Generate response
     with st.chat_message("assistant"):
-        with st.status("Analyzing Legal Logic...", expanded=True) as status:
+        with st.status("Synthesizing Adversarial Logic...", expanded=True) as status:
             try:
                 full_input = f"{LEGAL_PROMPT}\n\nUSER DRAFT: {prompt}"
                 response = client.models.generate_content(
@@ -141,20 +129,27 @@ if prompt := st.chat_input("Submit your draft for revision..."):
                 final_answer = ""
                 for part in response.candidates[0].content.parts:
                     if part.thought:
-                        with st.expander("🔍 GAP ANALYSIS", expanded=True):
+                        with st.expander("🔍 INTERNAL GAP ANALYSIS", expanded=True):
                             st.info(clean_legal_text(part.text))
-                    else:
-                        final_answer += part.text
+                    else: final_answer += part.text
 
+                # Archiving
                 if final_answer:
-                    st.write("💾 Archiving to Zilliz Memory...")
-                    ai_emb = client.models.embed_content(model=EMBED_MODEL, contents=final_answer[:59000])
-                    collection.insert([[ai_emb.embeddings[0].values], [final_answer[:59000]], [USER_IDENTITY], ["assistant"]])
+                    u_emb = client.models.embed_content(model=EMBED_MODEL, contents=prompt).embeddings[0].values
+                    a_emb = client.models.embed_content(model=EMBED_MODEL, contents=final_answer[:59000]).embeddings[0].values
+                    collection.insert([[u_emb, a_emb], [prompt, final_answer[:59000]], [USER_IDENTITY, USER_IDENTITY], ["user", "assistant"]])
                     collection.flush()
-
-                status.update(label="Complete", state="complete", expanded=False)
-                st.subheader("Revised Legal Submission")
-                st.markdown(clean_legal_text(final_answer))
-                st.session_state.messages.append({"role": "assistant", "content": final_answer})
+                    
+                status.update(label="Analysis Complete", state="complete", expanded=False)
+                
+                # Show new interaction in its own specific window
+                with st.expander("🆕 CURRENT REVISION (Reply Affidavit)", expanded=True):
+                    st.markdown("**Original Draft:**")
+                    st.write(prompt)
+                    st.markdown("---")
+                    st.markdown("**Revised Submission (Firm & Refutative):**")
+                    st.markdown(clean_legal_text(final_answer))
+                
+                st.session_state.messages.append({"user": prompt, "assistant": final_answer})
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Logic Engine Error: {e}")
