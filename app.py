@@ -7,7 +7,7 @@ from google import genai
 from google.genai import types
 from pymilvus import connections, Collection, utility, FieldSchema, CollectionSchema, DataType
 
-# --- 1. GLOBAL PROMPT (Updated for Reply Affidavit Protocol) ---
+# --- 1. GLOBAL PROMPT (Aggressive Reply Affidavit Protocol) ---
 LEGAL_PROMPT = """
 You are a Senior Legal Advisor specialized in Singapore Family Law. 
 GOAL: Help the user achieve a 75:25 asset division ratio for Auxiliary Matters (AM).
@@ -18,9 +18,8 @@ PRECEDENTS:
 
 REVISION PROTOCOL:
 - Analyze user input for "lapses" (e.g., missing bank statements, vague "family expense" claims, or untraced funds).
-- create a table identifying the paragraph of applicant response with discrepancy using precise legal language to close all evidential gaps.
 - IMPORTANT: This is a reply affidavit. DO NOT quote any case names or references (like TQU v TQT) in the revised text. Simply infer the legal principles as being within the court's knowledge.
-- TONE: Use a respectful, firm, and aggressive tone that is intellectually difficult to refute. Focus on the Respondent's failure to discharge their evidential burden.
+- TONE: Use a non-respectful, firm, and aggressive tone that is intellectually difficult to refute. Focus on the Respondent's failure to discharge their evidential burden.
 """
 
 # --- 2. CONFIG & IDENTITY ---
@@ -35,14 +34,12 @@ def check_password():
     if "passwords" not in st.secrets:
         st.error("🚨 Configuration Error: '[passwords]' section missing in Secrets.")
         return False
-
     def password_entered():
         if st.session_state["username"] in st.secrets["passwords"] and st.session_state["password"] == st.secrets["passwords"][st.session_state["username"]]:
             st.session_state["password_correct"] = True
             del st.session_state["password"]
             del st.session_state["username"]
         else: st.session_state["password_correct"] = False
-
     if "password_correct" not in st.session_state:
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password")
@@ -90,91 +87,8 @@ st.title("⚖️ Principal Legal Advisor")
 
 if "messages" not in st.session_state:
     raw_history = load_history(USER_IDENTITY)
-    # Group history into pairs (User + AI) for the single-window requirement
     st.session_state.messages = []
     temp_pair = {}
     for item in raw_history:
-        if item['role'] == 'user':
-            temp_pair = {"user": item['text']}
-        elif item['role'] == 'assistant' and "user" in temp_pair:
-            temp_pair["assistant"] = item['text']
-            st.session_state.messages.append(temp_pair)
-            temp_pair = {}
-
-# --- 6. DISPLAY HISTORY (Collapsible Windows) ---
-st.subheader("Consultation History")
-for i, entry in enumerate(st.session_state.messages):
-    with st.expander(f"📂 Interaction {i+1}: {entry['user'][:50]}...", expanded=False):
-        st.markdown("**👤 Your Query:**")
-        st.write(entry['user'])
-        st.markdown("---")
-        st.markdown("**⚖️ Advisor Strategy:**")
-        st.markdown(clean_legal_text(entry['assistant']))
-
-# --- 7. CURRENT INTERACTION ---
-client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
-
-if prompt := st.chat_input("Enter your reply affidavit draft..."):
-    # Generate response
-    with st.chat_message("assistant"):
-        with st.status("Synthesizing Adversarial Logic...", expanded=True) as status:
-            try:
-                full_input = f"{LEGAL_PROMPT}\n\nUSER DRAFT: {prompt}"
-                response = client.models.generate_content(
-                    model=MODEL_ID,
-                    contents=full_input,
-                    config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(include_thoughts=True), temperature=0.0)
-                )
-                
-                final_answer = ""
-                for part in response.candidates[0].content.parts:
-                    if part.thought:
-                        with st.expander("🔍 INTERNAL GAP ANALYSIS", expanded=True):
-                            st.info(clean_legal_text(part.text))
-                    else: final_answer += part.text
-
-           # --- UPDATED ARCHIVING LOGIC (Inside the Assistant Block) ---
-
-                if final_answer:
-                    st.write("💾 Archiving to Zilliz...")
-                    
-                    # Zilliz VARCHAR Limit is 60,000. We slice at 59,500 to be safe.
-                    # We prioritize the Final Answer for the 'text' field.
-                    safe_final_answer = final_answer[:59500] 
-                    
-                    try:
-                        # 1. Generate Embeddings for the response
-                        ai_emb = client.models.embed_content(
-                            model=EMBED_MODEL, 
-                            contents=safe_final_answer
-                        ).embeddings[0].values
-                        
-                        # 2. Generate Embeddings for the user prompt
-                        user_emb = client.models.embed_content(
-                            model=EMBED_MODEL, 
-                            contents=prompt[:59500]
-                        ).embeddings[0].values
-                
-                        # 3. Insert into Zilliz
-                        # We store the user query and the AI's revised answer
-                        collection.insert([
-                            [user_emb, ai_emb], 
-                            [prompt[:59500], safe_final_answer], 
-                            [USER_IDENTITY, USER_IDENTITY], 
-                            ["user", "assistant"]
-                        ])
-                        collection.flush()
-        
-    except Exception as e:
-        st.warning(f"Note: Response was too large for full archival ({len(final_answer)} chars). Storing truncated version.")
-                # Show new interaction in its own specific window
-                with st.expander("🆕 CURRENT REVISION (Reply Affidavit)", expanded=True):
-                    st.markdown("**Original Draft:**")
-                    st.write(prompt)
-                    st.markdown("---")
-                    st.markdown("**Revised Submission (Firm & Refutative):**")
-                    st.markdown(clean_legal_text(final_answer))
-                
-                st.session_state.messages.append({"user": prompt, "assistant": final_answer})
-            except Exception as e:
-                st.error(f"Logic Engine Error: {e}")
+        if item['role'] == 'user': temp_pair = {"user": item['text']}
+        elif item['role'] == 'assistant' and "user" in temp_pair
