@@ -1,6 +1,7 @@
 import streamlit as st
 import json
 import os
+import re # Added for text cleaning
 from google import genai
 from google.genai import types
 
@@ -17,28 +18,40 @@ if "gcp_service_account" in st.secrets:
 
 client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
-# --- 3. UI ---
-st.set_page_config(page_title="Legal Strategist", layout="wide")
+# --- 3. TEXT CLEANING UTILITY ---
+def clean_legal_text(text):
+    """Fixes common 2026 SDK formatting glitches like missing spaces and LaTeX artifacts."""
+    if not text:
+        return ""
+    # Fix missing spaces after common words/punctuation
+    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text) 
+    # Fix specific dollar sign and math symbol artifacts
+    text = text.replace("add−back", "add-back").replace("S$", "S$ ")
+    # Ensure paragraphs have proper spacing
+    text = text.replace("\n", "\n\n")
+    return text
+
+# --- 4. UI ---
+st.set_page_config(page_title="Legal Advisor", layout="wide")
 st.title("⚖️ Principal Legal Advisor")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display History
+# Display History with cleaned formatting
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+        st.markdown(clean_legal_text(msg["content"]))
 
-# --- 4. ENGINE ---
-if prompt := st.chat_input("Enter asset details..."):
+# --- 5. ENGINE ---
+if prompt := st.chat_input("Enter details regarding the S$160k or mortgage..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # We use st.empty() to stream the "Synthesis" status without blocking the UI
         status_placeholder = st.empty()
-        status_placeholder.info("⏳ Initializing Deep Think Synthesis...")
+        status_placeholder.info("⏳ Synthesizing Legal Logic...")
 
         try:
             response = client.models.generate_content(
@@ -50,23 +63,22 @@ if prompt := st.chat_input("Enter asset details..."):
                 )
             )
 
-            # Clear the "Waiting" status
             status_placeholder.empty()
 
-            # --- PARSING FOR READABILITY ---
             for candidate in response.candidates:
                 for part in candidate.content.parts:
                     if part.thought:
-                        # Move Reasoning to the MAIN window, but style it as a technical block
-                        with st.expander("🔍 STRATEGIC REASONING (INTERNAL LOGIC)", expanded=True):
-                            st.info(part.text)
+                        with st.expander("🔍 INTERNAL STRATEGIC REASONING", expanded=False):
+                            # Cleaning the internal thoughts too
+                            st.info(clean_legal_text(part.text))
                     
                     if part.text:
-                        # Clean Markdown Formatting for the Final Answer
+                        # Clean the final output before displaying
+                        clean_output = clean_legal_text(part.text)
                         st.subheader("Final Legal Strategy")
                         st.markdown("---")
-                        st.markdown(part.text)
-                        st.session_state.messages.append({"role": "assistant", "content": part.text})
+                        st.markdown(clean_output)
+                        st.session_state.messages.append({"role": "assistant", "content": clean_output})
 
         except Exception as e:
             status_placeholder.error(f"Logic Engine Error: {e}")
