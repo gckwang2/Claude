@@ -8,7 +8,7 @@ from pymilvus import connections, Collection, utility, FieldSchema, CollectionSc
 
 # --- 1. CONFIGURATION (HARDCODED REGION) ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
-LOCATION = "us-central1"  # Hardcoded to bypass secrets
+LOCATION = "global"  # Hardcoded to bypass secrets
 MODEL_ID = "gemini-3.1-pro-preview"
 
 # --- 2. AUTHENTICATION GATE ---
