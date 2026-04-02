@@ -39,7 +39,9 @@ def check_password():
             st.session_state["password_correct"] = True
             del st.session_state["password"]
             del st.session_state["username"]
-        else: st.session_state["password_correct"] = False
+        else:
+            st.session_state["password_correct"] = False
+            
     if "password_correct" not in st.session_state:
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password")
@@ -47,7 +49,8 @@ def check_password():
         return False
     return st.session_state["password_correct"]
 
-if not check_password(): st.stop()
+if not check_password():
+    st.stop()
 
 # --- 4. ZILLIZ & UTILS ---
 @st.cache_resource
@@ -58,37 +61,12 @@ def init_zilliz():
         fields = [
             FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
             FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
-            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=200000), 
+            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=60000), 
             FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=100),
             FieldSchema(name="role", dtype=DataType.VARCHAR, max_length=20)
         ]
         col = Collection(col_name, CollectionSchema(fields))
         col.create_index("vector", {"metric_type": "L2", "index_type": "IVF_FLAT", "params": {"nlist": 128}})
-    else: col = Collection(col_name)
-    col.load()
-    return col
-
-collection = init_zilliz()
-
-def clean_legal_text(text):
-    if not text: return ""
-    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
-    return text.replace("add−back", "add-back").replace("S$", "S$ ").replace("\n", "\n\n")
-
-def load_history(session_id):
-    try:
-        results = collection.query(expr=f'session_id == "{session_id}"', output_fields=["text", "role"])
-        return sorted(results, key=lambda x: x['id'])
-    except: return []
-
-# --- 5. UI SETUP ---
-st.set_page_config(page_title="Legal Strategist", layout="wide")
-st.title("⚖️ Principal Legal Advisor")
-
-if "messages" not in st.session_state:
-    raw_history = load_history(USER_IDENTITY)
-    st.session_state.messages = []
-    temp_pair = {}
-    for item in raw_history:
-        if item['role'] == 'user': temp_pair = {"user": item['text']}
-        elif item['role'] == 'assistant' and "user" in temp_pair
+    else:
+        col = Collection(col_name)
+    col.
