@@ -135,35 +135,35 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
 
            # --- UPDATED ARCHIVING LOGIC (Inside the Assistant Block) ---
 
-            if final_answer:
-                st.write("💾 Archiving to Zilliz...")
-                
-                # Zilliz VARCHAR Limit is 60,000. We slice at 59,500 to be safe.
-                # We prioritize the Final Answer for the 'text' field.
-                safe_final_answer = final_answer[:59500] 
-                
-                try:
-                    # 1. Generate Embeddings for the response
-                    ai_emb = client.models.embed_content(
-                        model=EMBED_MODEL, 
-                        contents=safe_final_answer
-                    ).embeddings[0].values
+                if final_answer:
+                    st.write("💾 Archiving to Zilliz...")
                     
-                    # 2. Generate Embeddings for the user prompt
-                    user_emb = client.models.embed_content(
-                        model=EMBED_MODEL, 
-                        contents=prompt[:59500]
-                    ).embeddings[0].values
-            
-                    # 3. Insert into Zilliz
-                    # We store the user query and the AI's revised answer
-                    collection.insert([
-                        [user_emb, ai_emb], 
-                        [prompt[:59500], safe_final_answer], 
-                        [USER_IDENTITY, USER_IDENTITY], 
-                        ["user", "assistant"]
-                    ])
-                    collection.flush()
+                    # Zilliz VARCHAR Limit is 60,000. We slice at 59,500 to be safe.
+                    # We prioritize the Final Answer for the 'text' field.
+                    safe_final_answer = final_answer[:59500] 
+                    
+                    try:
+                        # 1. Generate Embeddings for the response
+                        ai_emb = client.models.embed_content(
+                            model=EMBED_MODEL, 
+                            contents=safe_final_answer
+                        ).embeddings[0].values
+                        
+                        # 2. Generate Embeddings for the user prompt
+                        user_emb = client.models.embed_content(
+                            model=EMBED_MODEL, 
+                            contents=prompt[:59500]
+                        ).embeddings[0].values
+                
+                        # 3. Insert into Zilliz
+                        # We store the user query and the AI's revised answer
+                        collection.insert([
+                            [user_emb, ai_emb], 
+                            [prompt[:59500], safe_final_answer], 
+                            [USER_IDENTITY, USER_IDENTITY], 
+                            ["user", "assistant"]
+                        ])
+                        collection.flush()
         
     except Exception as e:
         st.warning(f"Note: Response was too large for full archival ({len(final_answer)} chars). Storing truncated version.")
