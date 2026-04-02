@@ -88,30 +88,39 @@ if prompt := st.chat_input("Describe the asset or claim..."):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
+    # 1. Create a dynamic status container
+    with st.status("Initializing Legal Synthesis...", expanded=True) as status:
         try:
-            # Deep Think Configuration
-            config = types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(include_thoughts=True),
-                temperature=0.0
-            )
-
+            st.write("🔍 Searching Zilliz for case precedents...")
+            # ... (Your Zilliz search code here) ...
+            
+            st.write("🧠 Activating Gemini 3.1 Pro 'Deep Think' mode...")
+            
             response = client.models.generate_content(
-                model=MODEL_ID,
-                contents=f"{LEGAL_PROMPT}\n\nUSER CLAIM: {prompt}",
-                config=config
+                model="gemini-3.1-pro-preview",
+                contents=f"{LEGAL_PROMPT}\n\nCONTEXT: {context}\n\nCLAIM: {prompt}",
+                config=types.GenerateContentConfig(
+                    thinking_config=types.ThinkingConfig(include_thoughts=True),
+                    temperature=0.0
+                )
             )
 
-            # Separate thoughts from final answer
-            answer = ""
+            # 2. Extract and display the synthesis (thoughts)
+            final_answer = ""
             for part in response.candidates[0].content.parts:
                 if part.thought:
-                    with st.expander("Strategic Reasoning"):
-                        st.write(part.text)
+                    # This shows the "synthesis thing" during the wait
+                    st.write(f"**Strategic Reasoning:** {part.text}")
                 else:
-                    answer += part.text
+                    final_answer += part.text
 
-            st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+            # 3. Finalize the status once thinking is done
+            status.update(label="Synthesis Complete!", state="complete", expanded=False)
             
+            # 4. Display the actual response
+            st.markdown(final_answer)
+            st.session_state.messages.append({"role": "assistant", "content": final_answer})
+
         except Exception as e:
+            status.update(label="Synthesis Failed", state="error")
             st.error(f"Logic Engine Error: {e}")
