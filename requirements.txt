@@ -11,3 +11,6 @@ pymilvus
 # Utilities
 protobuf
 uuid
+
+google-cloud-aiplatform>=1.70.0
+google-genai>=0.3.0
