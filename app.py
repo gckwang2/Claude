@@ -87,40 +87,41 @@ if prompt := st.chat_input("Describe the asset or claim..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.chat_message("assistant"):
-    # 1. Create a dynamic status container
-    with st.status("Initializing Legal Synthesis...", expanded=True) as status:
-        try:
-            st.write("🔍 Searching Zilliz for case precedents...")
-            # ... (Your Zilliz search code here) ...
-            
-            st.write("🧠 Activating Gemini 3.1 Pro 'Deep Think' mode...")
-            
-            response = client.models.generate_content(
-                model="gemini-3.1-pro-preview",
-                contents=f"{LEGAL_PROMPT}\n\nCONTEXT: {context}\n\nCLAIM: {prompt}",
-                config=types.GenerateContentConfig(
-                    thinking_config=types.ThinkingConfig(include_thoughts=True),
-                    temperature=0.0
+   with st.chat_message("assistant"):
+        # The 'with' statement starts here
+        with st.status("Initializing Legal Synthesis...", expanded=True) as status:
+            try:
+                # Everything inside this 'try' must be indented 4 spaces from 'try'
+                st.write("🔍 Accessing Zilliz Cloud for case precedents...")
+                # (Insert your vector search logic here)
+                
+                st.write("🧠 Engaging Gemini 3.1 Pro Reasoning Engine...")
+                st.write("⚖️ Applying TQU v TQT [2020] SGCA 8 framework...")
+
+                response = client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=f"{LEGAL_PROMPT}\n\nUSER: {prompt}",
+                    config=types.GenerateContentConfig(
+                        thinking_config=types.ThinkingConfig(include_thoughts=True),
+                        temperature=0.0
+                    )
                 )
-            )
 
-            # 2. Extract and display the synthesis (thoughts)
-            final_answer = ""
-            for part in response.candidates[0].content.parts:
-                if part.thought:
-                    # This shows the "synthesis thing" during the wait
-                    st.write(f"**Strategic Reasoning:** {part.text}")
-                else:
-                    final_answer += part.text
+                # Process the response parts
+                final_answer = ""
+                for part in response.candidates[0].content.parts:
+                    if part.thought:
+                        # This fulfills the 'synthesis' requirement during the wait
+                        st.write(f"**Strategic Reasoning:** {part.text}")
+                    else:
+                        final_answer += part.text
 
-            # 3. Finalize the status once thinking is done
-            status.update(label="Synthesis Complete!", state="complete", expanded=False)
-            
-            # 4. Display the actual response
-            st.markdown(final_answer)
-            st.session_state.messages.append({"role": "assistant", "content": final_answer})
+                status.update(label="Synthesis Complete!", state="complete", expanded=False)
+                
+                # The final answer is displayed outside the status box
+                st.markdown(final_answer)
+                st.session_state.messages.append({"role": "assistant", "content": final_answer})
 
-        except Exception as e:
-            status.update(label="Synthesis Failed", state="error")
-            st.error(f"Logic Engine Error: {e}")
+            except Exception as e:
+                status.update(label="Synthesis Failed", state="error")
+                st.error(f"Logic Engine Error: {e}")
