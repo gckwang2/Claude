@@ -9,7 +9,7 @@ from pymilvus import connections, Collection, utility, FieldSchema, CollectionSc
 
 # --- 1. GLOBAL PROMPT (Aggressive Reply Affidavit Protocol) ---
 LEGAL_PROMPT = """
-You are a Senior Legal Stratgeist specialized in Singapore Family Law. 
+You are a Senior Legal Strategist specialized in Singapore Family Law. 
 GOAL: Help the user achieve a 75:25 asset division ratio for Auxiliary Matters (AM).
 
 PRECEDENTS:
@@ -82,10 +82,25 @@ def clean_legal_text(text):
 
 def load_history(session_id):
     try:
-        results = collection.query(expr=f'session_id == "{session_id}"', output_fields=["text", "role"])
+        # We fetch the 'id' field now so we can delete specific records later
+        results = collection.query(expr=f'session_id == "{session_id}"', output_fields=["id", "text", "role"])
         return sorted(results, key=lambda x: x['id'])
     except:
         return []
+
+def delete_interaction(ids_to_delete, index_in_state):
+    """Deletes records from Zilliz and removes from the local session state."""
+    try:
+        # Construct deletion expression based on primary keys
+        delete_expr = f"id in {ids_to_delete}"
+        collection.delete(delete_expr)
+        collection.flush()
+        # Remove from local UI list
+        st.session_state.messages.pop(index_in_state)
+        st.success("Interaction deleted successfully.")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Deletion failed: {e}")
 
 # --- 5. UI SETUP ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
@@ -97,9 +112,10 @@ if "messages" not in st.session_state:
     temp_pair = {}
     for item in raw_history:
         if item['role'] == 'user':
-            temp_pair = {"user": item['text']}
+            temp_pair = {"user": item['text'], "u_id": item['id']}
         elif item['role'] == 'assistant' and "user" in temp_pair:
             temp_pair["assistant"] = item['text']
+            temp_pair["a_id"] = item['id']
             st.session_state.messages.append(temp_pair)
             temp_pair = {}
 
@@ -112,6 +128,12 @@ for i, entry in enumerate(st.session_state.messages):
         st.markdown("---")
         st.markdown("**⚖️ Advisor Strategy:**")
         st.markdown(clean_legal_text(entry['assistant']))
+        
+        # Delete Button
+        if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
+            # We pass the list of IDs (User record ID and Assistant record ID)
+            ids = [entry["u_id"], entry["a_id"]]
+            delete_interaction(ids, i)
 
 # --- 7. CHAT ENGINE ---
 client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
@@ -144,7 +166,8 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
                     u_emb = client.models.embed_content(model=EMBED_MODEL, contents=safe_prompt).embeddings[0].values
                     a_emb = client.models.embed_content(model=EMBED_MODEL, contents=safe_final).embeddings[0].values
                     
-                    collection.insert([
+                    # Inserting and getting the new IDs
+                    res = collection.insert([
                         [u_emb, a_emb], 
                         [safe_prompt, safe_final], 
                         [USER_IDENTITY, USER_IDENTITY], 
@@ -152,16 +175,17 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
                     ])
                     collection.flush()
                     
+                    # Add new interaction to session state so it can be deleted immediately if needed
+                    new_ids = res.primary_keys
+                    st.session_state.messages.append({
+                        "user": prompt, 
+                        "assistant": final_answer,
+                        "u_id": new_ids[0],
+                        "a_id": new_ids[1]
+                    })
+                    
                 status.update(label="Analysis Complete", state="complete", expanded=False)
-                
-                with st.expander("🆕 CURRENT REVISION (Reply Affidavit)", expanded=True):
-                    st.markdown("**Original Draft:**")
-                    st.write(prompt)
-                    st.markdown("---")
-                    st.markdown("**Revised Submission (Firm & Refutative):**")
-                    st.markdown(clean_legal_text(final_answer))
-                
-                st.session_state.messages.append({"user": prompt, "assistant": final_answer})
+                st.rerun() # Refresh to show the new interaction in the history list
                 
             except Exception as e:
                 st.error(f"Logic Engine Error: {e}")
