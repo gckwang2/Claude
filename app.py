@@ -58,8 +58,7 @@ if prompt := st.chat_input("Detail your asset claim..."):
             
             # New call syntax
             response = client.models.generate_content(
-                #model="gemini-3.1-pro-preview",
-                model="gemini-3-flash-preview",
+                model="gemini-3.1-pro-preview", 
                 contents=full_input,
                 config=config
             )
