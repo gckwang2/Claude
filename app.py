@@ -131,10 +131,10 @@ if prompt := st.chat_input("Describe a claim or missing asset..."):
             for hit in search_results[0]:
                 context_str += f"\n[Previous Record: {hit.entity.get('text')}]"
 
-            # B. SYNTHESIS (Claude Opus 4.6 Flagship)
+            # B. SYNTHESIS (Claude Opus 4.1 Flagship)
             enriched_input = f"{context_str}\n\nUSER NEW CLAIM: {prompt}"
             response = client.messages.create(
-                model="claude-opus-4-6", # Updated April 2026 Stable ID
+                model="anthropic-claude-opus-4-1", # Updated April 2026 Stable ID
                 max_tokens=4096,
                 system=LEGAL_PROMPT,
                 messages=[{"role": "user", "content": enriched_input}]
