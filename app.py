@@ -65,8 +65,103 @@ def init_zilliz():
             FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=100),
             FieldSchema(name="role", dtype=DataType.VARCHAR, max_length=20)
         ]
-        col = Collection(col_name, CollectionSchema(fields))
+        schema = CollectionSchema(fields)
+        col = Collection(col_name, schema)
         col.create_index("vector", {"metric_type": "L2", "index_type": "IVF_FLAT", "params": {"nlist": 128}})
     else:
         col = Collection(col_name)
-    col.
+    col.load()
+    return col
+
+collection = init_zilliz()
+
+def clean_legal_text(text):
+    if not text: return ""
+    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+    return text.replace("add−back", "add-back").replace("S$", "S$ ").replace("\n", "\n\n")
+
+def load_history(session_id):
+    try:
+        results = collection.query(expr=f'session_id == "{session_id}"', output_fields=["text", "role"])
+        return sorted(results, key=lambda x: x['id'])
+    except:
+        return []
+
+# --- 5. UI SETUP ---
+st.set_page_config(page_title="Legal Strategist", layout="wide")
+st.title("⚖️ Principal Legal Advisor")
+
+if "messages" not in st.session_state:
+    raw_history = load_history(USER_IDENTITY)
+    st.session_state.messages = []
+    temp_pair = {}
+    for item in raw_history:
+        if item['role'] == 'user':
+            temp_pair = {"user": item['text']}
+        elif item['role'] == 'assistant' and "user" in temp_pair:
+            temp_pair["assistant"] = item['text']
+            st.session_state.messages.append(temp_pair)
+            temp_pair = {}
+
+# --- 6. DISPLAY HISTORY ---
+st.subheader("Consultation History")
+for i, entry in enumerate(st.session_state.messages):
+    with st.expander(f"📂 Interaction {i+1}: {entry['user'][:50]}...", expanded=False):
+        st.markdown("**👤 Your Query:**")
+        st.write(entry['user'])
+        st.markdown("---")
+        st.markdown("**⚖️ Advisor Strategy:**")
+        st.markdown(clean_legal_text(entry['assistant']))
+
+# --- 7. CHAT ENGINE ---
+client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
+
+if prompt := st.chat_input("Enter your reply affidavit draft..."):
+    with st.chat_message("assistant"):
+        with st.status("Synthesizing Adversarial Logic...", expanded=True) as status:
+            try:
+                full_input = f"{LEGAL_PROMPT}\n\nUSER DRAFT: {prompt}"
+                response = client.models.generate_content(
+                    model=MODEL_ID,
+                    contents=full_input,
+                    config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(include_thoughts=True), temperature=0.0)
+                )
+                
+                final_answer = ""
+                for part in response.candidates[0].content.parts:
+                    if part.thought:
+                        with st.expander("🔍 INTERNAL GAP ANALYSIS", expanded=True):
+                            st.info(clean_legal_text(part.text))
+                    else:
+                        final_answer += part.text
+
+                # --- 8. SMART ARCHIVING ---
+                if final_answer:
+                    st.write("💾 Archiving to Zilliz...")
+                    safe_final = final_answer[:59000]
+                    safe_prompt = prompt[:59000]
+                    
+                    u_emb = client.models.embed_content(model=EMBED_MODEL, contents=safe_prompt).embeddings[0].values
+                    a_emb = client.models.embed_content(model=EMBED_MODEL, contents=safe_final).embeddings[0].values
+                    
+                    collection.insert([
+                        [u_emb, a_emb], 
+                        [safe_prompt, safe_final], 
+                        [USER_IDENTITY, USER_IDENTITY], 
+                        ["user", "assistant"]
+                    ])
+                    collection.flush()
+                    
+                status.update(label="Analysis Complete", state="complete", expanded=False)
+                
+                with st.expander("🆕 CURRENT REVISION (Reply Affidavit)", expanded=True):
+                    st.markdown("**Original Draft:**")
+                    st.write(prompt)
+                    st.markdown("---")
+                    st.markdown("**Revised Submission (Firm & Refutative):**")
+                    st.markdown(clean_legal_text(final_answer))
+                
+                st.session_state.messages.append({"user": prompt, "assistant": final_answer})
+                
+            except Exception as e:
+                st.error(f"Logic Engine Error: {e}")
