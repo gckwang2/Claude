@@ -61,7 +61,7 @@ def init_zilliz():
         fields = [
             FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
             FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
-            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=60000), 
+            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=200000), 
             FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=100),
             FieldSchema(name="role", dtype=DataType.VARCHAR, max_length=20)
         ]
