@@ -7,13 +7,7 @@ from google import genai
 from google.genai import types
 from pymilvus import connections, Collection, utility, FieldSchema, CollectionSchema, DataType
 
-# --- 1. CONFIGURATION ---
-PROJECT_ID = st.secrets["PROJECT_ID"]
-LOCATION = "global" 
-MODEL_ID = "gemini-3.1-pro-preview"
-EMBED_MODEL = "text-embedding-004" 
-
-# --- 2. LEGAL STRATEGY PROMPT ---
+# --- 1. GLOBAL LEGAL STRATEGY PROMPT (STAY-PUT VERSION) ---
 LEGAL_PROMPT = """
 You are a Senior Legal Advisor specialized in Singapore Family Law. 
 GOAL: Help the user achieve a 75:25 asset division ratio for Auxiliary Matters (AM).
@@ -23,28 +17,35 @@ PRECEDENTS:
 - ANJ v ANK: 3-step structured approach (Direct vs. Indirect contributions).
 
 REVISION PROTOCOL:
-- Analyze user input for "lapses" (e.g., missing bank statements, vague "family expense" claims, or untraced funds like S$160k).
+- Analyze user input for "lapses" (e.g., missing bank statements, vague "family expense" claims, or untraced funds like).
 - Provide a "REVISED RESPONSE" for court submission using precise legal language to close all evidential gaps.
 """
+
+# --- 2. CONFIGURATION ---
+PROJECT_ID = st.secrets["PROJECT_ID"]
+LOCATION = "global" 
+MODEL_ID = "gemini-3.1-pro-preview"
+EMBED_MODEL = "text-embedding-004" 
+USER_IDENTITY = "Freddy_Legal_Project_2026" # Persistent Key for "The Next Day"
 
 # --- 3. AUTH & CLIENT ---
 if "gcp_service_account" in st.secrets:
     with open("gcp_key.json", "w") as f:
         json.dump(dict(st.secrets["gcp_service_account"]), f)
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
-
 client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
-# --- 4. ZILLIZ SETUP ---
+# --- 4. ZILLIZ SETUP (v2 for max_length) ---
 def init_zilliz():
     connections.connect(uri=st.secrets["ZILLIZ_URI"], token=st.secrets["ZILLIZ_TOKEN"])
-    col_name = "legal_memory"
+    col_name = "legal_memory_v2"
     if not utility.has_collection(col_name):
         fields = [
             FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
             FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
-            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=5000),
-            FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=100)
+            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=60000), 
+            FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=100),
+            FieldSchema(name="role", dtype=DataType.VARCHAR, max_length=20)
         ]
         col = Collection(col_name, CollectionSchema(fields))
         col.create_index("vector", {"metric_type": "L2", "index_type": "IVF_FLAT", "params": {"nlist": 128}})
@@ -62,47 +63,44 @@ def clean_legal_text(text):
     text = text.replace("add−back", "add-back").replace("S$", "S$ ")
     return text.replace("\n", "\n\n")
 
-def retrieve_context(query, collection, top_k=2):
+def load_history(session_id):
     try:
-        emb = client.models.embed_content(model=EMBED_MODEL, contents=query)
-        query_vector = emb.embeddings[0].values
-        results = collection.search(data=[query_vector], anns_field="vector", param={"metric_type": "L2"}, limit=top_k, output_fields=["text"])
-        return "\n---\n".join([hit.entity.get('text') for hit in results[0]])
-    except: return ""
+        results = collection.query(expr=f'session_id == "{session_id}"', output_fields=["text", "role"])
+        sorted_results = sorted(results, key=lambda x: x['id'])
+        return [{"role": r['role'], "content": r['text']} for r in sorted_results]
+    except: return []
 
-# --- 6. UI SETUP ---
+# --- 6. UI & INITIALIZATION ---
 st.set_page_config(page_title="Legal Advisor", layout="wide")
 st.title("⚖️ Principal Legal Advisor")
 
 if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "chat_id" not in st.session_state:
-    st.session_state.chat_id = str(uuid.uuid4())[:8]
+    with st.spinner("🔄 Restoring previous day's consultations..."):
+        st.session_state.messages = load_history(USER_IDENTITY)
 
-# --- COLLAPSIBLE HISTORY LOGIC ---
+# Display Collapsible History
 if st.session_state.messages:
-    with st.expander("📚 View Previous Legal Consultations", expanded=False):
-        for i, msg in enumerate(st.session_state.messages):
-            role_label = "👤 User Query" if msg["role"] == "user" else "⚖️ Advisor Response"
-            st.markdown(f"**{role_label}:**")
-            st.markdown(clean_legal_text(msg["content"]))
+    with st.expander("📚 View Permanent Legal History", expanded=False):
+        for msg in st.session_state.messages:
+            role_icon = "👤" if msg["role"] == "user" else "⚖️"
+            st.markdown(f"**{role_icon} {msg['role'].upper()}:**\n{clean_legal_text(msg['content'])}")
             st.markdown("---")
 
 # --- 7. CHAT & RAG ENGINE ---
-if prompt := st.chat_input("Submit your claim or draft for revision..."):
-    # Display the current query immediately
+if prompt := st.chat_input("Submit your draft for revision..."):
+    # Save User Input to Zilliz
+    user_emb = client.models.embed_content(model=EMBED_MODEL, contents=prompt)
+    collection.insert([[user_emb.embeddings[0].values], [prompt], [USER_IDENTITY], ["user"]])
+    
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.status("Initializing Legal Synthesis...", expanded=True) as status:
+        with st.status("Synthesizing Logic...", expanded=True) as status:
             try:
-                st.write("🔍 Searching Zilliz memory...")
-                context = retrieve_context(prompt, collection)
-                
-                st.write("🧠 Engaging Gemini 3.1 Pro 'Deep Think'...")
-                full_input = f"{LEGAL_PROMPT}\n\nPREVIOUS CONTEXT:\n{context}\n\nUSER DRAFT: {prompt}"
+                # Combine Prompt + History Context + Current Input
+                full_input = f"{LEGAL_PROMPT}\n\nUSER DRAFT FOR REVISION: {prompt}"
                 
                 response = client.models.generate_content(
                     model=MODEL_ID,
@@ -113,25 +111,22 @@ if prompt := st.chat_input("Submit your claim or draft for revision..."):
                 final_answer = ""
                 for part in response.candidates[0].content.parts:
                     if part.thought:
-                        with st.expander("🔍 INTERNAL STRATEGIC REASONING", expanded=True):
+                        with st.expander("🔍 INTERNAL REASONING (GAP ANALYSIS)", expanded=True):
                             st.info(clean_legal_text(part.text))
                     else:
                         final_answer += part.text
 
+                # Save AI Response to Zilliz
                 if final_answer:
                     st.write("💾 Archiving to Zilliz...")
-                    emb = client.models.embed_content(model=EMBED_MODEL, contents=final_answer)
-                    collection.insert([[emb.embeddings[0].values], [final_answer], [st.session_state.chat_id]])
+                    ai_emb = client.models.embed_content(model=EMBED_MODEL, contents=final_answer[:59000])
+                    collection.insert([[ai_emb.embeddings[0].values], [final_answer[:59000]], [USER_IDENTITY], ["assistant"]])
                     collection.flush()
 
-                status.update(label="Synthesis Complete", state="complete", expanded=False)
-                
-                # Render the final output clearly
+                status.update(label="Complete", state="complete", expanded=False)
                 st.subheader("Revised Legal Submission")
-                st.markdown("---")
                 st.markdown(clean_legal_text(final_answer))
                 st.session_state.messages.append({"role": "assistant", "content": final_answer})
 
             except Exception as e:
-                status.update(label="Process Failed", state="error")
                 st.error(f"Logic Engine Error: {e}")
