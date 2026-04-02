@@ -1,3 +1,13 @@
+# Web Interface
 streamlit
-anthropic[vertex]
+
+# AI & LLM (Google Vertex AI for Claude and Embeddings)
 google-cloud-aiplatform
+anthropic[vertex]
+
+# Vector Database (Zilliz Cloud / Milvus)
+pymilvus
+
+# Utilities
+protobuf
+uuid
