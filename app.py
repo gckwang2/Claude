@@ -20,6 +20,7 @@ REVISION PROTOCOL:
 - Analyze user input for "lapses" (e.g., missing bank statements, vague "family expense" claims, or untraced funds).
 - Provide a "REVISED RESPONSE" for court submission using precise legal language to close all evidential gaps.
 - Do not quote any case reference in the response, just infer to the court knowledge.
+- Use a non aggressive tone, but firm and difficult to refute in revising the user reponse.
 """
 
 PROJECT_ID = st.secrets["PROJECT_ID"]
