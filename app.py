@@ -32,7 +32,7 @@ OPERATIONAL PROTOCOLS:
 PROJECT_ID = st.secrets["PROJECT_ID"]
 LOCATION = "us-east5" 
 # Using the exact version identifier provided
-MODEL_ID = "claude-sonnet-4@20250514" 
+MODEL_ID = "publishers/anthropic/models/claude-sonnet-4@20250514" 
 EMBED_MODEL = "text-embedding-004"
 USER_IDENTITY = "Freddy_Legal_Project_2026"
 
