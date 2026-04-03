@@ -27,11 +27,6 @@ OPERATIONAL PROTOCOLS:
 - THE "NET POOL" DEFENSE: Explicitly link specific debts to specific assets (e.g., Renovation Loan vs. Sutton Park Valuation) to "neutralize" low-value assets.
 - NO LEGAL CITATIONS: Do not mention case names. Write with the "Voice of the Court"—firm, objective, and mathematically driven.
 - BANNED PHRASES: Avoid "I feel" or "I think." Use "The objective evidence confirms..." or "The Respondent has failed to produce..."
-
-TONE & STYLE:
-- Skeptical, forensic, and intellectually superior. 
-- Focus on the Respondent's "Evidential Failure." 
-- Structure responses to be scannable (Use Bullet Points for "Material Contradictions").
 """
 
 # --- 2. CONFIG & IDENTITY ---
@@ -114,12 +109,37 @@ def delete_interaction(ids_to_delete, index_in_state):
         collection.delete(delete_expr)
         collection.flush()
         st.session_state.messages.pop(index_in_state)
-        st.success("Interaction purged.")
+        st.success("Interaction purged from legal memory.")
         st.rerun()
     except Exception as e:
         st.error(f"Deletion failed: {e}")
 
-# --- 6. UI SETUP ---
+# --- 6. RAG RETRIEVAL ENGINE ---
+def retrieve_relevant_context(query_text, top_k=3):
+    """Semantic search to pull relevant facts from Zilliz."""
+    try:
+        search_emb = client.models.embed_content(
+            model=EMBED_MODEL, 
+            contents=query_text
+        ).embeddings[0].values
+        
+        search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
+        results = collection.search(
+            data=[search_emb], 
+            anns_field="vector", 
+            param=search_params, 
+            limit=top_k, 
+            output_fields=["text"],
+            expr=f'session_id == "{USER_IDENTITY}"' # Ensure we only pull the user's data
+        )
+        
+        context_snippets = [hit.entity.get("text") for hit in results[0]]
+        return "\n\n---\n\n".join(context_snippets) if context_snippets else "No relevant past context found."
+    except Exception as e:
+        st.warning(f"Memory Retrieval failed: {e}")
+        return ""
+
+# --- 7. UI SETUP ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
 st.title("⚖️ Principal Legal Advisor")
 
@@ -139,7 +159,7 @@ if "messages" not in st.session_state:
             })
             temp_pair = {}
 
-# --- 7. DISPLAY HISTORY ---
+# --- 8. DISPLAY HISTORY ---
 st.subheader("Consultation History")
 for i, entry in enumerate(st.session_state.messages):
     with st.expander(f"📂 Interaction {i+1}: {entry['user'][:50]}...", expanded=False):
@@ -152,14 +172,28 @@ for i, entry in enumerate(st.session_state.messages):
         if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
             delete_interaction([entry["u_id"], entry["a_id"]], i)
 
-# --- 8. CHAT ENGINE ---
+# --- 9. CHAT ENGINE (AUGMENTED GENERATION) ---
 client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
 if prompt := st.chat_input("Enter your reply affidavit draft..."):
     with st.chat_message("assistant"):
-        with st.status("Analyzing Evidential Lapses...", expanded=True) as status:
+        with st.status("Accessing Legal Memory & Analyzing Lapses...", expanded=True) as status:
             try:
-                full_input = f"{LEGAL_PROMPT}\n\nUSER DRAFT: {prompt}"
+                # STEP 1: RETRIEVE
+                past_context = retrieve_relevant_context(prompt)
+                
+                # STEP 2: AUGMENT
+                full_input = f"""
+                {LEGAL_PROMPT}
+
+                ### RELEVANT CASE CONTEXT FROM PREVIOUS INTERACTIONS:
+                {past_context}
+
+                ### CURRENT USER DRAFT TO REVISE:
+                {prompt}
+                """
+
+                # STEP 3: GENERATE
                 response = client.models.generate_content(
                     model=MODEL_ID,
                     contents=full_input,
@@ -174,6 +208,7 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
                     else:
                         final_answer += part.text
 
+                # STEP 4: ARCHIVE (New context becomes searchable for future prompts)
                 if final_answer:
                     st.write("💾 Archiving to Zilliz...")
                     safe_final = final_answer[:59000]
@@ -190,7 +225,7 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
                     ])
                     collection.flush()
                     
-                    # Force update local state before rerun so it doesn't disappear
+                    # Update local state immediately
                     p_keys = res.primary_keys
                     st.session_state.messages.append({
                         "user": prompt, "assistant": final_answer,
