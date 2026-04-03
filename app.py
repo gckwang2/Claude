@@ -30,17 +30,16 @@ OPERATIONAL PROTOCOLS:
 
 # --- 2. CONFIG & IDENTITY ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
-LOCATION = "us-east5" 
-MODEL_ID = "gemini-3.1-flash-preview" 
+LOCATION = "us-central1" # Recommended for Preview models
+MODEL_ID = "gemini-3.1-flash-lite-preview" 
 EMBED_MODEL = "text-embedding-004"
 USER_IDENTITY = "Freddy_Legal_Project_2026"
 
-# --- 3. RESTORED AUTHENTICATION GATE ---
+# --- 3. AUTHENTICATION GATE ---
 def check_password():
     if "passwords" not in st.secrets:
         st.error("🚨 Configuration Error: '[passwords]' missing.")
         return False
-
     def password_entered():
         if (st.session_state["username"] in st.secrets["passwords"] and 
             st.session_state["password"] == st.secrets["passwords"][st.session_state["username"]]):
@@ -49,19 +48,12 @@ def check_password():
             del st.session_state["username"]
         else:
             st.session_state["password_correct"] = False
-
     if "password_correct" not in st.session_state:
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password")
         st.button("Log In", on_click=password_entered)
         return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("Username", key="username")
-        st.text_input("Password", type="password", key="password")
-        st.button("Log In", on_click=password_entered)
-        st.error("😕 User not known or password incorrect")
-        return False
-    return True
+    return st.session_state.get("password_correct", False)
 
 if not check_password():
     st.stop()
@@ -114,9 +106,9 @@ def retrieve_relevant_context(query_text):
         return "\n\n---\n\n".join([hit.entity.get("text") for hit in res[0]])
     except: return ""
 
-# --- 7. UI SETUP & HISTORY (FIXED SYNTAX) ---
+# --- 7. UI SETUP ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
-st.title("⚖️ Principal Legal Advisor (Gemini 3.1 Flash)")
+st.title("⚖️ Principal Legal Advisor (Flash 3.1 Lite)")
 
 if "messages" not in st.session_state:
     raw_history = load_history(USER_IDENTITY)
@@ -135,18 +127,16 @@ if "messages" not in st.session_state:
 st.subheader("Consultation History")
 for i, entry in enumerate(st.session_state.messages):
     with st.expander(f"📂 Interaction {i+1}: {entry['user'][:50]}...", expanded=False):
-        st.markdown("**👤 Your Query:**")
         st.write(entry['user'])
         st.markdown("---")
-        st.markdown("**⚖️ Advisor Strategy:**")
         st.markdown(clean_legal_text(entry['assistant']))
         if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
             delete_interaction([entry["u_id"], entry["a_id"]], i)
 
-# --- 8. CHAT ENGINE (RAG Loop) ---
+# --- 8. CHAT ENGINE ---
 if prompt := st.chat_input("Enter your reply affidavit draft..."):
     with st.chat_message("assistant"):
-        with st.status("Analyzing with Gemini 3.1 Flash...", expanded=True) as status:
+        with st.status(f"Analyzing via {MODEL_ID}...", expanded=True) as status:
             try:
                 past_context = retrieve_relevant_context(prompt)
                 full_input = f"{LEGAL_PROMPT}\n\n### CONTEXT:\n{past_context}\n\n### DRAFT:\n{prompt}"
