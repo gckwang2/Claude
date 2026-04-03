@@ -2,44 +2,32 @@ import streamlit as st
 import json
 import os
 import re
+from anthropic import AnthropicVertex # REQUIRED: pip install anthropic[vertex]
 from google import genai
 from google.genai import types
 from pymilvus import connections, Collection, utility, FieldSchema, CollectionSchema, DataType
 
-# --- 1. GLOBAL PROMPT (Elite Singapore Family Law Strategist) ---
+# --- 1. GLOBAL PROMPT ---
 LEGAL_PROMPT = """
-ROLE:
-You are an Elite Singapore Family Law Strategist specializing in High-Conflict Auxiliary Matters (AM). 
-
-GOAL: 
-Construct a Reply Affidavit narrative that systematically secures a 75:25 asset division by:
-1. Proving 100% Direct Financial Contribution for key assets (e.g., 18 Simon Road).
-2. Triggering a Robust Adverse Inference due to the Respondent’s documented non-disclosure (UK Accounts/Income).
-3. Offsetting Matrimonial Liabilities (Unsecured Loans/Brother’s Loan) against the Gross Pool.
-
-STRATEGIC FRAMEWORK (INTERNAL LOGIC):
-- ANJ v ANK: Maximize Step 1 (Direct) by linking mortgages/downpayments to the User’s sole earnings.
-- TQU v TQT: Use "Lack of Candor" as a mechanical multiplier for the final ratio.
-- TNL v TNK: Defend against "Dissipation" by proving the "Money Trail" to regulated brokers (IBKR) and household maintenance (Status Quo).
-
-OPERATIONAL PROTOCOLS:
-- THE "CREDIBILITY TRAP": Whenever the Respondent makes a "Bare Allegation" (e.g., Cambodia property), demand the "Substratum of Evidence." 
-- NO LEGAL CITATIONS: Do not mention case names. Write with the "Voice of the Court"—firm, objective, and mathematically driven.
-- BANNED PHRASES: Avoid "I feel" or "I think." Use "The objective evidence confirms..."
+ROLE: Elite Singapore Family Law Strategist.
+GOAL: Construct a Reply Affidavit narrative for 75:25 asset division.
+- ANJ v ANK: Direct contributions.
+- TQU v TQT: Adverse inference for non-disclosure.
+- TNL v TNK: Defend against dissipation.
+NO LEGAL CITATIONS. Firm, objective, forensic tone.
 """
 
-# --- 2. CONFIG & IDENTITY (Updated for us-east5 & Claude Sonnet 4 Specific Version) ---
+# --- 2. CONFIG & IDENTITY ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
 LOCATION = "us-east5" 
-# Using the exact version identifier provided
-MODEL_ID = "publishers/anthropic/models/claude-sonnet-4@20250514" 
+MODEL_ID = "claude-sonnet-4@20250514" 
 EMBED_MODEL = "text-embedding-004"
 USER_IDENTITY = "Freddy_Legal_Project_2026"
 
 # --- 3. LOGIN GATE ---
 def check_password():
     if "passwords" not in st.secrets:
-        st.error("🚨 Configuration Error: '[passwords]' section missing in Secrets.")
+        st.error("🚨 Configuration Error: '[passwords]' missing.")
         return False
     def password_entered():
         if (st.session_state["username"] in st.secrets["passwords"] and 
@@ -59,14 +47,16 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- 4. GCP AUTH FIX ---
+# --- 4. GCP AUTH & CLIENTS ---
 if "gcp_service_account" in st.secrets:
     with open("gcp_key.json", "w") as f:
         json.dump(dict(st.secrets["gcp_service_account"]), f)
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
-else:
-    st.error("GCP Service Account credentials missing in secrets!")
-    st.stop()
+
+# Anthropic Client for the Brain
+anthropic_client = AnthropicVertex(region=LOCATION, project_id=PROJECT_ID)
+# Gemini Client for the Embeddings (Zilliz search)
+gemini_client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
 # --- 5. ZILLIZ & UTILS ---
 @st.cache_resource
@@ -81,8 +71,7 @@ def init_zilliz():
             FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=100),
             FieldSchema(name="role", dtype=DataType.VARCHAR, max_length=20)
         ]
-        schema = CollectionSchema(fields)
-        col = Collection(col_name, schema)
+        col = Collection(col_name, CollectionSchema(fields))
         col.create_index("vector", {"metric_type": "L2", "index_type": "IVF_FLAT", "params": {"nlist": 128}})
     else:
         col = Collection(col_name)
@@ -93,125 +82,99 @@ collection = init_zilliz()
 
 def clean_legal_text(text):
     if not text: return ""
-    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
     return text.replace("add−back", "add-back").replace("S$", "S$ ").replace("\n", "\n\n")
 
 def load_history(session_id):
     try:
-        results = collection.query(expr=f'session_id == "{session_id}"', output_fields=["id", "text", "role"])
-        return sorted(results, key=lambda x: x['id'])
-    except:
-        return []
+        res = collection.query(expr=f'session_id == "{session_id}"', output_fields=["id", "text", "role"])
+        return sorted(res, key=lambda x: x['id'])
+    except: return []
 
-def delete_interaction(ids_to_delete, index_in_state):
-    try:
-        delete_expr = f"id in {ids_to_delete}"
-        collection.delete(delete_expr)
-        collection.flush()
-        st.session_state.messages.pop(index_in_state)
-        st.success("Interaction purged.")
-        st.rerun()
-    except Exception as e:
-        st.error(f"Deletion failed: {e}")
+def delete_interaction(ids, idx):
+    collection.delete(f"id in {ids}")
+    collection.flush()
+    st.session_state.messages.pop(idx)
+    st.rerun()
 
 # --- 6. RAG RETRIEVAL ENGINE ---
-def retrieve_relevant_context(query_text, top_k=3):
+def retrieve_relevant_context(query_text):
     try:
-        search_emb = client.models.embed_content(
-            model=EMBED_MODEL, 
-            contents=query_text
+        # Embed with Gemini
+        search_emb = gemini_client.models.embed_content(
+            model=EMBED_MODEL, contents=query_text
         ).embeddings[0].values
         
-        search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
-        results = collection.search(
-            data=[search_emb], 
-            anns_field="vector", 
-            param=search_params, 
-            limit=top_k, 
-            output_fields=["text"],
+        # Search Zilliz
+        res = collection.search(
+            data=[search_emb], anns_field="vector", 
+            param={"metric_type": "L2", "params": {"nprobe": 10}}, 
+            limit=3, output_fields=["text"],
             expr=f'session_id == "{USER_IDENTITY}"'
         )
-        
-        context_snippets = [hit.entity.get("text") for hit in results[0]]
-        return "\n\n---\n\n".join(context_snippets) if context_snippets else "No relevant past context found."
-    except Exception as e:
-        return ""
+        return "\n\n---\n\n".join([hit.entity.get("text") for hit in res[0]])
+    except: return "No relevant past context found."
 
 # --- 7. UI SETUP ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
-st.title("⚖️ Principal Legal Advisor (Claude Sonnet 4.0)")
+st.title("⚖️ Principal Legal Advisor (Claude 4 Sonnet)")
 
 if "messages" not in st.session_state:
-    raw_history = load_history(USER_IDENTITY)
+    raw = load_history(USER_IDENTITY)
     st.session_state.messages = []
-    temp_pair = {}
-    for item in raw_history:
-        if item['role'] == 'user':
-            temp_pair = {"user": item['text'], "u_id": item['id']}
-        elif item['role'] == 'assistant' and "user" in temp_pair:
-            st.session_state.messages.append({
-                "user": temp_pair["user"], 
-                "assistant": item['text'],
-                "u_id": temp_pair["u_id"],
-                "a_id": item['id']
-            })
-            temp_pair = {}
+    temp = {}
+    for item in raw:
+        if item['role'] == 'user': temp = {"user": item['text'], "u_id": item['id']}
+        elif item['role'] == 'assistant' and "user" in temp:
+            st.session_state.messages.append({**temp, "assistant": item['text'], "a_id": item['id']})
 
 # --- 8. DISPLAY HISTORY ---
-st.subheader("Consultation History")
 for i, entry in enumerate(st.session_state.messages):
-    with st.expander(f"📂 Interaction {i+1}: {entry['user'][:50]}...", expanded=False):
-        st.markdown("**👤 Your Query:**")
+    with st.expander(f"📂 Interaction {i+1}: {entry['user'][:50]}..."):
         st.write(entry['user'])
         st.markdown("---")
-        st.markdown("**⚖️ Advisor Strategy:**")
         st.markdown(clean_legal_text(entry['assistant']))
-        if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
+        if st.button(f"🗑️ Delete {i+1}", key=f"del_{i}"):
             delete_interaction([entry["u_id"], entry["a_id"]], i)
 
-# --- 9. CHAT ENGINE (Claude Sonnet 4 RAG) ---
-client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
-
-if prompt := st.chat_input("Enter your reply affidavit draft..."):
+# --- 9. CHAT ENGINE (Claude 4 Version) ---
+if prompt := st.chat_input("Enter reply affidavit draft..."):
     with st.chat_message("assistant"):
-        with st.status(f"Analyzing with {MODEL_ID}...", expanded=True) as status:
+        with st.status(f"Strategic Analysis via {MODEL_ID}...", expanded=True) as status:
             try:
-                # STEP 1: RETRIEVE
                 past_context = retrieve_relevant_context(prompt)
                 
-                # STEP 2: AUGMENT
-                full_input = f"{LEGAL_PROMPT}\n\n### CASE CONTEXT:\n{past_context}\n\n### CURRENT DRAFT:\n{prompt}"
-
-                # STEP 3: GENERATE
-                response = client.models.generate_content(
+                # Claude 4 specific Message API call
+                response = anthropic_client.messages.create(
                     model=MODEL_ID,
-                    contents=full_input,
-                    config=types.GenerateContentConfig(temperature=0.0)
+                    max_tokens=4096,
+                    temperature=0.0,
+                    system=LEGAL_PROMPT,
+                    messages=[
+                        {"role": "user", "content": f"PAST CONTEXT:\n{past_context}\n\nUSER DRAFT:\n{prompt}"}
+                    ]
                 )
                 
-                final_answer = response.text
+                final_answer = response.content[0].text
+                st.markdown(clean_legal_text(final_answer))
 
-                # STEP 4: ARCHIVE
-                if final_answer:
-                    st.write("💾 Archiving to Zilliz...")
-                    u_emb = client.models.embed_content(model=EMBED_MODEL, contents=prompt[:59000]).embeddings[0].values
-                    a_emb = client.models.embed_content(model=EMBED_MODEL, contents=final_answer[:59000]).embeddings[0].values
-                    
-                    res = collection.insert([
-                        [u_emb, a_emb], 
-                        [prompt[:59000], final_answer[:59000]], 
-                        [USER_IDENTITY, USER_IDENTITY], 
-                        ["user", "assistant"]
-                    ])
-                    collection.flush()
-                    
-                    p_keys = res.primary_keys
-                    st.session_state.messages.append({
-                        "user": prompt, "assistant": final_answer,
-                        "u_id": p_keys[0], "a_id": p_keys[1]
-                    })
-                    
-                status.update(label="Strategic Revision Complete", state="complete", expanded=False)
+                # ARCHIVE
+                u_emb = gemini_client.models.embed_content(model=EMBED_MODEL, contents=prompt[:59000]).embeddings[0].values
+                a_emb = gemini_client.models.embed_content(model=EMBED_MODEL, contents=final_answer[:59000]).embeddings[0].values
+                
+                res = collection.insert([
+                    [u_emb, a_emb], [prompt[:59000], final_answer[:59000]], 
+                    [USER_IDENTITY, USER_IDENTITY], ["user", "assistant"]
+                ])
+                collection.flush()
+                
+                # Update UI state immediately
+                p_keys = res.primary_keys
+                st.session_state.messages.append({
+                    "user": prompt, "assistant": final_answer,
+                    "u_id": p_keys[0], "a_id": p_keys[1]
+                })
+                
+                status.update(label="Analysis Complete", state="complete")
                 st.rerun() 
                 
             except Exception as e:
