@@ -2,12 +2,11 @@ import streamlit as st
 import json
 import os
 import re
-import uuid
 from google import genai
 from google.genai import types
 from pymilvus import connections, Collection, utility, FieldSchema, CollectionSchema, DataType
 
-# --- 1. GLOBAL PROMPT (Aggressive Reply Affidavit Protocol) ---
+# --- 1. GLOBAL PROMPT (Elite Singapore Family Law Strategist) ---
 LEGAL_PROMPT = """
 ROLE:
 You are an Elite Singapore Family Law Strategist specializing in High-Conflict Auxiliary Matters (AM). 
@@ -47,8 +46,10 @@ def check_password():
     if "passwords" not in st.secrets:
         st.error("🚨 Configuration Error: '[passwords]' section missing in Secrets.")
         return False
+
     def password_entered():
-        if st.session_state["username"] in st.secrets["passwords"] and st.session_state["password"] == st.secrets["passwords"][st.session_state["username"]]:
+        if (st.session_state["username"] in st.secrets["passwords"] and 
+            st.session_state["password"] == st.secrets["passwords"][st.session_state["username"]]):
             st.session_state["password_correct"] = True
             del st.session_state["password"]
             del st.session_state["username"]
@@ -65,7 +66,16 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- 4. ZILLIZ & UTILS ---
+# --- 4. GCP AUTH FIX (Prevents Metadata Service Error) ---
+if "gcp_service_account" in st.secrets:
+    with open("gcp_key.json", "w") as f:
+        json.dump(dict(st.secrets["gcp_service_account"]), f)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
+else:
+    st.error("GCP Service Account credentials missing in secrets!")
+    st.stop()
+
+# --- 5. ZILLIZ & UTILS ---
 @st.cache_resource
 def init_zilliz():
     connections.connect(uri=st.secrets["ZILLIZ_URI"], token=st.secrets["ZILLIZ_TOKEN"])
@@ -95,27 +105,23 @@ def clean_legal_text(text):
 
 def load_history(session_id):
     try:
-        # We fetch the 'id' field now so we can delete specific records later
         results = collection.query(expr=f'session_id == "{session_id}"', output_fields=["id", "text", "role"])
         return sorted(results, key=lambda x: x['id'])
     except:
         return []
 
 def delete_interaction(ids_to_delete, index_in_state):
-    """Deletes records from Zilliz and removes from the local session state."""
     try:
-        # Construct deletion expression based on primary keys
         delete_expr = f"id in {ids_to_delete}"
         collection.delete(delete_expr)
         collection.flush()
-        # Remove from local UI list
         st.session_state.messages.pop(index_in_state)
-        st.success("Interaction deleted successfully.")
+        st.success("Record purged from legal memory.")
         st.rerun()
     except Exception as e:
         st.error(f"Deletion failed: {e}")
 
-# --- 5. UI SETUP ---
+# --- 6. UI SETUP ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
 st.title("⚖️ Principal Legal Advisor")
 
@@ -127,12 +133,18 @@ if "messages" not in st.session_state:
         if item['role'] == 'user':
             temp_pair = {"user": item['text'], "u_id": item['id']}
         elif item['role'] == 'assistant' and "user" in temp_pair:
-            temp_pair["assistant"] = item['text']
+            temp_pair["assistant"] = item['text'], 
             temp_pair["a_id"] = item['id']
-            st.session_state.messages.append(temp_pair)
+            # Re-formatting because query returns list/dict
+            st.session_state.messages.append({
+                "user": temp_pair["user"], 
+                "assistant": item['text'],
+                "u_id": temp_pair["u_id"],
+                "a_id": item['id']
+            })
             temp_pair = {}
 
-# --- 6. DISPLAY HISTORY ---
+# --- 7. DISPLAY HISTORY ---
 st.subheader("Consultation History")
 for i, entry in enumerate(st.session_state.messages):
     with st.expander(f"📂 Interaction {i+1}: {entry['user'][:50]}...", expanded=False):
@@ -142,18 +154,16 @@ for i, entry in enumerate(st.session_state.messages):
         st.markdown("**⚖️ Advisor Strategy:**")
         st.markdown(clean_legal_text(entry['assistant']))
         
-        # Delete Button
         if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
-            # We pass the list of IDs (User record ID and Assistant record ID)
             ids = [entry["u_id"], entry["a_id"]]
             delete_interaction(ids, i)
 
-# --- 7. CHAT ENGINE ---
+# --- 8. CHAT ENGINE ---
 client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
 if prompt := st.chat_input("Enter your reply affidavit draft..."):
     with st.chat_message("assistant"):
-        with st.status("Synthesizing Adversarial Logic...", expanded=True) as status:
+        with st.status("Analyzing Evidential Lapses...", expanded=True) as status:
             try:
                 full_input = f"{LEGAL_PROMPT}\n\nUSER DRAFT: {prompt}"
                 response = client.models.generate_content(
@@ -170,7 +180,6 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
                     else:
                         final_answer += part.text
 
-                # --- 8. SMART ARCHIVING ---
                 if final_answer:
                     st.write("💾 Archiving to Zilliz...")
                     safe_final = final_answer[:59000]
@@ -179,7 +188,6 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
                     u_emb = client.models.embed_content(model=EMBED_MODEL, contents=safe_prompt).embeddings[0].values
                     a_emb = client.models.embed_content(model=EMBED_MODEL, contents=safe_final).embeddings[0].values
                     
-                    # Inserting and getting the new IDs
                     res = collection.insert([
                         [u_emb, a_emb], 
                         [safe_prompt, safe_final], 
@@ -188,17 +196,8 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
                     ])
                     collection.flush()
                     
-                    # Add new interaction to session state so it can be deleted immediately if needed
-                    new_ids = res.primary_keys
-                    st.session_state.messages.append({
-                        "user": prompt, 
-                        "assistant": final_answer,
-                        "u_id": new_ids[0],
-                        "a_id": new_ids[1]
-                    })
-                    
-                status.update(label="Analysis Complete", state="complete", expanded=False)
-                st.rerun() # Refresh to show the new interaction in the history list
+                status.update(label="Strategic Revision Complete", state="complete", expanded=False)
+                st.rerun() 
                 
             except Exception as e:
                 st.error(f"Logic Engine Error: {e}")
