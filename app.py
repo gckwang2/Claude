@@ -46,7 +46,6 @@ def check_password():
     if "passwords" not in st.secrets:
         st.error("🚨 Configuration Error: '[passwords]' section missing in Secrets.")
         return False
-
     def password_entered():
         if (st.session_state["username"] in st.secrets["passwords"] and 
             st.session_state["password"] == st.secrets["passwords"][st.session_state["username"]]):
@@ -55,7 +54,6 @@ def check_password():
             del st.session_state["username"]
         else:
             st.session_state["password_correct"] = False
-            
     if "password_correct" not in st.session_state:
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password")
@@ -66,7 +64,7 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- 4. GCP AUTH FIX (Prevents Metadata Service Error) ---
+# --- 4. GCP AUTH FIX ---
 if "gcp_service_account" in st.secrets:
     with open("gcp_key.json", "w") as f:
         json.dump(dict(st.secrets["gcp_service_account"]), f)
@@ -116,7 +114,7 @@ def delete_interaction(ids_to_delete, index_in_state):
         collection.delete(delete_expr)
         collection.flush()
         st.session_state.messages.pop(index_in_state)
-        st.success("Record purged from legal memory.")
+        st.success("Interaction purged.")
         st.rerun()
     except Exception as e:
         st.error(f"Deletion failed: {e}")
@@ -133,9 +131,6 @@ if "messages" not in st.session_state:
         if item['role'] == 'user':
             temp_pair = {"user": item['text'], "u_id": item['id']}
         elif item['role'] == 'assistant' and "user" in temp_pair:
-            temp_pair["assistant"] = item['text'], 
-            temp_pair["a_id"] = item['id']
-            # Re-formatting because query returns list/dict
             st.session_state.messages.append({
                 "user": temp_pair["user"], 
                 "assistant": item['text'],
@@ -155,8 +150,7 @@ for i, entry in enumerate(st.session_state.messages):
         st.markdown(clean_legal_text(entry['assistant']))
         
         if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
-            ids = [entry["u_id"], entry["a_id"]]
-            delete_interaction(ids, i)
+            delete_interaction([entry["u_id"], entry["a_id"]], i)
 
 # --- 8. CHAT ENGINE ---
 client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
@@ -195,6 +189,13 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
                         ["user", "assistant"]
                     ])
                     collection.flush()
+                    
+                    # Force update local state before rerun so it doesn't disappear
+                    p_keys = res.primary_keys
+                    st.session_state.messages.append({
+                        "user": prompt, "assistant": final_answer,
+                        "u_id": p_keys[0], "a_id": p_keys[1]
+                    })
                     
                 status.update(label="Strategic Revision Complete", state="complete", expanded=False)
                 st.rerun() 
