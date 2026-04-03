@@ -28,11 +28,11 @@ OPERATIONAL PROTOCOLS:
 - BANNED PHRASES: Avoid "I feel" or "I think." Use "The objective evidence confirms..."
 """
 
-# --- 2. CONFIG & IDENTITY (Updated for us-east5 & Claude Sonnet 4) ---
+# --- 2. CONFIG & IDENTITY (Updated for us-east5 & Claude Sonnet 4 Specific Version) ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
 LOCATION = "us-east5" 
-# Using the specific model name provided
-MODEL_ID = "publishers/anthropic/models/anthropic-claude-sonnet-4" 
+# Using the exact version identifier provided
+MODEL_ID = "claude-sonnet-4@20250514" 
 EMBED_MODEL = "text-embedding-004"
 USER_IDENTITY = "Freddy_Legal_Project_2026"
 
@@ -139,7 +139,7 @@ def retrieve_relevant_context(query_text, top_k=3):
 
 # --- 7. UI SETUP ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
-st.title("⚖️ Principal Legal Advisor (Claude Sonnet 4)")
+st.title("⚖️ Principal Legal Advisor (Claude Sonnet 4.0)")
 
 if "messages" not in st.session_state:
     raw_history = load_history(USER_IDENTITY)
@@ -174,7 +174,7 @@ client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
 if prompt := st.chat_input("Enter your reply affidavit draft..."):
     with st.chat_message("assistant"):
-        with st.status(f"Analyzing with {MODEL_ID} in us-east5...", expanded=True) as status:
+        with st.status(f"Analyzing with {MODEL_ID}...", expanded=True) as status:
             try:
                 # STEP 1: RETRIEVE
                 past_context = retrieve_relevant_context(prompt)
