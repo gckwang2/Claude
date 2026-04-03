@@ -32,7 +32,7 @@ OPERATIONAL PROTOCOLS:
 # --- 2. CONFIG & IDENTITY ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
 LOCATION = "us-central1" 
-ENDPOINT_ID = "b72257f8-3872-4ddd-8981-54688cf9c4a5" 
+ENDPOINT_ID = "mg-endpoint-b72257f8-3872-4ddd-8981-54688cf9c4a5" 
 EMBED_MODEL = "text-embedding-004"
 USER_IDENTITY = "Freddy_Legal_Project_2026"
 
