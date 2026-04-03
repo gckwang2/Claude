@@ -37,39 +37,32 @@ USER_IDENTITY = "Freddy_Legal_Project_2026"
 
 # --- 3. RESTORED AUTHENTICATION GATE ---
 def check_password():
-    """Returns True if the user had the correct password."""
     if "passwords" not in st.secrets:
-        st.error("🚨 Configuration Error: '[passwords]' missing in secrets.toml.")
+        st.error("🚨 Configuration Error: '[passwords]' missing.")
         return False
 
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
         if (st.session_state["username"] in st.secrets["passwords"] and 
             st.session_state["password"] == st.secrets["passwords"][st.session_state["username"]]):
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store password
+            del st.session_state["password"]
             del st.session_state["username"]
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # First run, show inputs for username and password.
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password")
         st.button("Log In", on_click=password_entered)
         return False
     elif not st.session_state["password_correct"]:
-        # Password not correct, show input + error.
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password")
         st.button("Log In", on_click=password_entered)
         st.error("😕 User not known or password incorrect")
         return False
-    else:
-        # Password correct.
-        return True
+    return True
 
-# Stop execution if not authenticated
 if not check_password():
     st.stop()
 
@@ -81,23 +74,11 @@ if "gcp_service_account" in st.secrets:
 
 client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
-# --- 5. ZILLIZ & UTILS (RAG PERSISTENCE) ---
+# --- 5. ZILLIZ & UTILS ---
 @st.cache_resource
 def init_zilliz():
     connections.connect(uri=st.secrets["ZILLIZ_URI"], token=st.secrets["ZILLIZ_TOKEN"])
-    col_name = "legal_memory_v2"
-    if not utility.has_collection(col_name):
-        fields = [
-            FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-            FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
-            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=60000), 
-            FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=100),
-            FieldSchema(name="role", dtype=DataType.VARCHAR, max_length=20)
-        ]
-        col = Collection(col_name, CollectionSchema(fields))
-        col.create_index("vector", {"metric_type": "L2", "index_type": "IVF_FLAT", "params": {"nlist": 128}})
-    else:
-        col = Collection(col_name)
+    col = Collection("legal_memory_v2")
     col.load()
     return col
 
@@ -115,13 +96,10 @@ def load_history(session_id):
         return []
 
 def delete_interaction(ids_to_delete, index_in_state):
-    try:
-        collection.delete(f"id in {ids_to_delete}")
-        collection.flush()
-        st.session_state.messages.pop(index_in_state)
-        st.rerun()
-    except Exception as e:
-        st.error(f"Deletion failed: {e}")
+    collection.delete(f"id in {ids_to_delete}")
+    collection.flush()
+    st.session_state.messages.pop(index_in_state)
+    st.rerun()
 
 # --- 6. RAG RETRIEVAL ENGINE ---
 def retrieve_relevant_context(query_text):
@@ -133,18 +111,63 @@ def retrieve_relevant_context(query_text):
             limit=3, output_fields=["text"],
             expr=f'session_id == "{USER_IDENTITY}"'
         )
-        context_snippets = [hit.entity.get("text") for hit in res[0]]
-        return "\n\n---\n\n".join(context_snippets) if context_snippets else "No past context found."
+        return "\n\n---\n\n".join([hit.entity.get("text") for hit in res[0]])
     except: return ""
 
-# --- 7. UI SETUP & HISTORY ---
+# --- 7. UI SETUP & HISTORY (FIXED SYNTAX) ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
 st.title("⚖️ Principal Legal Advisor (Gemini 3.1 Flash)")
 
-# Re-load session state from Zilliz
 if "messages" not in st.session_state:
     raw_history = load_history(USER_IDENTITY)
     st.session_state.messages = []
     temp_pair = {}
     for item in raw_history:
-        if item
+        if item['role'] == 'user':
+            temp_pair = {"user": item['text'], "u_id": item['id']}
+        elif item['role'] == 'assistant' and "user" in temp_pair:
+            st.session_state.messages.append({
+                "user": temp_pair["user"], "assistant": item['text'],
+                "u_id": temp_pair["u_id"], "a_id": item['id']
+            })
+            temp_pair = {}
+
+st.subheader("Consultation History")
+for i, entry in enumerate(st.session_state.messages):
+    with st.expander(f"📂 Interaction {i+1}: {entry['user'][:50]}...", expanded=False):
+        st.markdown("**👤 Your Query:**")
+        st.write(entry['user'])
+        st.markdown("---")
+        st.markdown("**⚖️ Advisor Strategy:**")
+        st.markdown(clean_legal_text(entry['assistant']))
+        if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
+            delete_interaction([entry["u_id"], entry["a_id"]], i)
+
+# --- 8. CHAT ENGINE (RAG Loop) ---
+if prompt := st.chat_input("Enter your reply affidavit draft..."):
+    with st.chat_message("assistant"):
+        with st.status("Analyzing with Gemini 3.1 Flash...", expanded=True) as status:
+            try:
+                past_context = retrieve_relevant_context(prompt)
+                full_input = f"{LEGAL_PROMPT}\n\n### CONTEXT:\n{past_context}\n\n### DRAFT:\n{prompt}"
+                
+                response = client.models.generate_content(
+                    model=MODEL_ID,
+                    contents=full_input,
+                    config=types.GenerateContentConfig(temperature=0.0)
+                )
+                final_answer = response.text
+                st.markdown(clean_legal_text(final_answer))
+
+                u_emb = client.models.embed_content(model=EMBED_MODEL, contents=prompt[:59000]).embeddings[0].values
+                a_emb = client.models.embed_content(model=EMBED_MODEL, contents=final_answer[:59000]).embeddings[0].values
+                
+                collection.insert([
+                    [u_emb, a_emb], [prompt[:59000], final_answer[:59000]], 
+                    [USER_IDENTITY, USER_IDENTITY], ["user", "assistant"]
+                ])
+                collection.flush()
+                status.update(label="Complete", state="complete")
+                st.rerun() 
+            except Exception as e:
+                st.error(f"Logic Engine Error: {e}")
