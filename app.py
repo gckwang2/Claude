@@ -6,7 +6,7 @@ from google import genai
 from google.genai import types
 from pymilvus import connections, Collection, utility, FieldSchema, CollectionSchema, DataType
 
-# --- 1. FULL LEGAL PROMPT (Logic Flow Intact) ---
+# --- 1. FULL REINSTATED LEGAL PROMPT (Freddy's Original Strategy) ---
 LEGAL_PROMPT = """
 ROLE:
 You are an Elite Singapore Family Law Strategist specializing in High-Conflict Auxiliary Matters (AM). 
@@ -26,13 +26,11 @@ OPERATIONAL PROTOCOLS:
 - THE "CREDIBILITY TRAP": Whenever the Respondent makes a "Bare Allegation" (e.g., Cambodia property), demand the "Substratum of Evidence." 
 - NO LEGAL CITATIONS: Do not mention case names. Write with the "Voice of the Court"—firm, objective, and mathematically driven.
 - BANNED PHRASES: Avoid "I feel" or "I think." Use "The objective evidence confirms..."
-- USE respectful tone
 """
 
 # --- 2. CONFIG & IDENTITY ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
 LOCATION = "us-east5" 
-# Updated to the current 3.1 Preview path
 MODEL_ID = "gemini-3.1-flash-preview" 
 EMBED_MODEL = "text-embedding-004"
 USER_IDENTITY = "Freddy_Legal_Project_2026"
@@ -72,7 +70,20 @@ client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 @st.cache_resource
 def init_zilliz():
     connections.connect(uri=st.secrets["ZILLIZ_URI"], token=st.secrets["ZILLIZ_TOKEN"])
-    col = Collection("legal_memory_v2")
+    col_name = "legal_memory_v2"
+    if not utility.has_collection(col_name):
+        # Fallback to create if missing
+        fields = [
+            FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+            FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
+            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=60000), 
+            FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=100),
+            FieldSchema(name="role", dtype=DataType.VARCHAR, max_length=20)
+        ]
+        col = Collection(col_name, CollectionSchema(fields))
+        col.create_index("vector", {"metric_type": "L2", "index_type": "IVF_FLAT", "params": {"nlist": 128}})
+    else:
+        col = Collection(col_name)
     col.load()
     return col
 
@@ -82,69 +93,86 @@ def clean_legal_text(text):
     if not text: return ""
     return text.replace("add−back", "add-back").replace("S$", "S$ ").replace("\n", "\n\n")
 
+def load_history(session_id):
+    try:
+        results = collection.query(expr=f'session_id == "{session_id}"', output_fields=["id", "text", "role"])
+        return sorted(results, key=lambda x: x['id'])
+    except:
+        return []
+
+def delete_interaction(ids_to_delete, index_in_state):
+    try:
+        collection.delete(f"id in {ids_to_delete}")
+        collection.flush()
+        st.session_state.messages.pop(index_in_state)
+        st.rerun()
+    except Exception as e:
+        st.error(f"Deletion failed: {e}")
+
 # --- 6. RAG RETRIEVAL ENGINE ---
 def retrieve_relevant_context(query_text):
     try:
-        # Embedding the query for semantic search
-        search_emb = client.models.embed_content(
-            model=EMBED_MODEL, 
-            contents=query_text
-        ).embeddings[0].values
-        
-        # Searching the user-specific memory pool
+        search_emb = client.models.embed_content(model=EMBED_MODEL, contents=query_text).embeddings[0].values
         res = collection.search(
-            data=[search_emb], 
-            anns_field="vector", 
+            data=[search_emb], anns_field="vector", 
             param={"metric_type": "L2", "params": {"nprobe": 10}}, 
-            limit=3, 
-            output_fields=["text"],
+            limit=3, output_fields=["text"],
             expr=f'session_id == "{USER_IDENTITY}"'
         )
-        
         context_snippets = [hit.entity.get("text") for hit in res[0]]
         return "\n\n---\n\n".join(context_snippets) if context_snippets else "No past context found."
-    except Exception as e:
-        return ""
+    except: return ""
 
-# --- 7. UI SETUP ---
+# --- 7. UI SETUP & HISTORY ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
 st.title("⚖️ Principal Legal Advisor (Gemini 3.1 Flash)")
 
-# --- 8. CHAT ENGINE (Gemini 3.1 Flash RAG) ---
+if "messages" not in st.session_state:
+    raw_history = load_history(USER_IDENTITY)
+    st.session_state.messages = []
+    temp_pair = {}
+    for item in raw_history:
+        if item['role'] == 'user':
+            temp_pair = {"user": item['text'], "u_id": item['id']}
+        elif item['role'] == 'assistant' and "user" in temp_pair:
+            st.session_state.messages.append({
+                "user": temp_pair["user"], "assistant": item['text'],
+                "u_id": temp_pair["u_id"], "a_id": item['id']
+            })
+            temp_pair = {}
+
+st.subheader("Consultation History")
+for i, entry in enumerate(st.session_state.messages):
+    with st.expander(f"📂 Interaction {i+1}: {entry['user'][:50]}...", expanded=False):
+        st.write(entry['user'])
+        st.markdown("---")
+        st.markdown(clean_legal_text(entry['assistant']))
+        if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
+            delete_interaction([entry["u_id"], entry["a_id"]], i)
+
+# --- 8. CHAT ENGINE (RAG Loop) ---
 if prompt := st.chat_input("Enter your reply affidavit draft..."):
     with st.chat_message("assistant"):
-        with st.status(f"Analyzing with {MODEL_ID}...", expanded=True) as status:
+        with st.status("Analyzing with Gemini 3.1 Flash...", expanded=True) as status:
             try:
-                # RAG STEP 1: RETRIEVE
+                # RETRIEVE
                 past_context = retrieve_relevant_context(prompt)
-                
-                # RAG STEP 2: AUGMENT
-                full_input = f"{LEGAL_PROMPT}\n\n### CASE CONTEXT:\n{past_context}\n\n### CURRENT DRAFT:\n{prompt}"
-
-                # RAG STEP 3: GENERATE (Temperature=0 for Freddy's precise logic)
+                # AUGMENT
+                full_input = f"{LEGAL_PROMPT}\n\n### CONTEXT:\n{past_context}\n\n### DRAFT:\n{prompt}"
+                # GENERATE
                 response = client.models.generate_content(
                     model=MODEL_ID,
                     contents=full_input,
                     config=types.GenerateContentConfig(temperature=0.0)
                 )
-                
                 final_answer = response.text
                 st.markdown(clean_legal_text(final_answer))
 
-                # RAG STEP 4: ARCHIVE NEW INTERACTION
-                if final_answer:
-                    u_emb = client.models.embed_content(model=EMBED_MODEL, contents=prompt[:59000]).embeddings[0].values
-                    a_emb = client.models.embed_content(model=EMBED_MODEL, contents=final_answer[:59000]).embeddings[0].values
-                    
-                    collection.insert([
-                        [u_emb, a_emb], 
-                        [prompt[:59000], final_answer[:59000]], 
-                        [USER_IDENTITY, USER_IDENTITY], 
-                        ["user", "assistant"]
-                    ])
-                    collection.flush()
+                # ARCHIVE
+                u_emb = client.models.embed_content(model=EMBED_MODEL, contents=prompt[:59000]).embeddings[0].values
+                a_emb = client.models.embed_content(model=EMBED_MODEL, contents=final_answer[:59000]).embeddings[0].values
                 
-                status.update(label="Strategic Revision Complete", state="complete")
-                
-            except Exception as e:
-                st.error(f"Logic Engine Error: {e}")
+                collection.insert([
+                    [u_emb, a_emb], [prompt[:59000], final_answer[:59000]], 
+                    [USER_IDENTITY, USER_IDENTITY], ["user", "assistant"]
+                ])
