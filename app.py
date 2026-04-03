@@ -23,16 +23,15 @@ STRATEGIC FRAMEWORK (INTERNAL LOGIC):
 - TNL v TNK: Defend against "Dissipation" by proving the "Money Trail" to regulated brokers (IBKR) and household maintenance (Status Quo).
 
 OPERATIONAL PROTOCOLS:
-- THE "CREDIBILITY TRAP": Whenever the Respondent makes a "Bare Allegation" (e.g., Cambodia property), demand the "Substratum of Evidence." Highlight that a "Factual Impossibility" (e.g., URA tracking overseas land) is evidence of perjury.
-- THE "NET POOL" DEFENSE: Explicitly link specific debts to specific assets (e.g., Renovation Loan vs. Sutton Park Valuation) to "neutralize" low-value assets.
+- THE "CREDIBILITY TRAP": Whenever the Respondent makes a "Bare Allegation" (e.g., Cambodia property), demand the "Substratum of Evidence."
 - NO LEGAL CITATIONS: Do not mention case names. Write with the "Voice of the Court"—firm, objective, and mathematically driven.
-- BANNED PHRASES: Avoid "I feel" or "I think." Use "The objective evidence confirms..." or "The Respondent has failed to produce..."
+- BANNED PHRASES: Avoid "I feel" or "I think." Use "The objective evidence confirms..."
 """
 
-# --- 2. CONFIG & IDENTITY ---
+# --- 2. CONFIG & IDENTITY (Updated for us-east5 & Claude 3.5 Sonnet) ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
-LOCATION = "global" 
-MODEL_ID = "gemini-3.1-pro-preview"
+LOCATION = "us-east5" 
+MODEL_ID = "publishers/anthropic/models/claude-3-5-sonnet@20240620" # Vertex AI Model Garden ID
 EMBED_MODEL = "text-embedding-004"
 USER_IDENTITY = "Freddy_Legal_Project_2026"
 
@@ -109,14 +108,13 @@ def delete_interaction(ids_to_delete, index_in_state):
         collection.delete(delete_expr)
         collection.flush()
         st.session_state.messages.pop(index_in_state)
-        st.success("Interaction purged from legal memory.")
+        st.success("Interaction purged.")
         st.rerun()
     except Exception as e:
         st.error(f"Deletion failed: {e}")
 
 # --- 6. RAG RETRIEVAL ENGINE ---
 def retrieve_relevant_context(query_text, top_k=3):
-    """Semantic search to pull relevant facts from Zilliz."""
     try:
         search_emb = client.models.embed_content(
             model=EMBED_MODEL, 
@@ -130,18 +128,17 @@ def retrieve_relevant_context(query_text, top_k=3):
             param=search_params, 
             limit=top_k, 
             output_fields=["text"],
-            expr=f'session_id == "{USER_IDENTITY}"' # Ensure we only pull the user's data
+            expr=f'session_id == "{USER_IDENTITY}"'
         )
         
         context_snippets = [hit.entity.get("text") for hit in results[0]]
-        return "\n\n---\n\n".join(context_snippets) if context_snippets else "No relevant past context found."
+        return "\n\n---\n\n".join(context_snippets) if context_snippets else "No relevant past context."
     except Exception as e:
-        st.warning(f"Memory Retrieval failed: {e}")
         return ""
 
 # --- 7. UI SETUP ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
-st.title("⚖️ Principal Legal Advisor")
+st.title("⚖️ Principal Legal Advisor (Claude 3.5 Sonnet)")
 
 if "messages" not in st.session_state:
     raw_history = load_history(USER_IDENTITY)
@@ -168,71 +165,47 @@ for i, entry in enumerate(st.session_state.messages):
         st.markdown("---")
         st.markdown("**⚖️ Advisor Strategy:**")
         st.markdown(clean_legal_text(entry['assistant']))
-        
         if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
             delete_interaction([entry["u_id"], entry["a_id"]], i)
 
-# --- 9. CHAT ENGINE (AUGMENTED GENERATION) ---
+# --- 9. CHAT ENGINE (Claude 3.5 Sonnet RAG) ---
 client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
 if prompt := st.chat_input("Enter your reply affidavit draft..."):
     with st.chat_message("assistant"):
-        with st.status("Accessing Legal Memory & Analyzing Lapses...", expanded=True) as status:
+        with st.status("Analyzing with Claude 3.5 Sonnet...", expanded=True) as status:
             try:
-                # STEP 1: RETRIEVE
                 past_context = retrieve_relevant_context(prompt)
-                
-                # STEP 2: AUGMENT
-                full_input = f"""
-                {LEGAL_PROMPT}
+                full_input = f"{LEGAL_PROMPT}\n\n### CONTEXT:\n{past_context}\n\n### DRAFT:\n{prompt}"
 
-                ### RELEVANT CASE CONTEXT FROM PREVIOUS INTERACTIONS:
-                {past_context}
-
-                ### CURRENT USER DRAFT TO REVISE:
-                {prompt}
-                """
-
-                # STEP 3: GENERATE
                 response = client.models.generate_content(
                     model=MODEL_ID,
                     contents=full_input,
-                    config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(include_thoughts=True), temperature=0.0)
+                    config=types.GenerateContentConfig(temperature=0.0)
                 )
                 
-                final_answer = ""
-                for part in response.candidates[0].content.parts:
-                    if part.thought:
-                        with st.expander("🔍 INTERNAL GAP ANALYSIS", expanded=True):
-                            st.info(clean_legal_text(part.text))
-                    else:
-                        final_answer += part.text
+                final_answer = response.text
 
-                # STEP 4: ARCHIVE (New context becomes searchable for future prompts)
                 if final_answer:
                     st.write("💾 Archiving to Zilliz...")
-                    safe_final = final_answer[:59000]
-                    safe_prompt = prompt[:59000]
-                    
-                    u_emb = client.models.embed_content(model=EMBED_MODEL, contents=safe_prompt).embeddings[0].values
-                    a_emb = client.models.embed_content(model=EMBED_MODEL, contents=safe_final).embeddings[0].values
+                    u_emb = client.models.embed_content(model=EMBED_MODEL, contents=prompt[:59000]).embeddings[0].values
+                    a_emb = client.models.embed_content(model=EMBED_MODEL, contents=final_answer[:59000]).embeddings[0].values
                     
                     res = collection.insert([
                         [u_emb, a_emb], 
-                        [safe_prompt, safe_final], 
+                        [prompt[:59000], final_answer[:59000]], 
                         [USER_IDENTITY, USER_IDENTITY], 
                         ["user", "assistant"]
                     ])
                     collection.flush()
                     
-                    # Update local state immediately
                     p_keys = res.primary_keys
                     st.session_state.messages.append({
                         "user": prompt, "assistant": final_answer,
                         "u_id": p_keys[0], "a_id": p_keys[1]
                     })
                     
-                status.update(label="Strategic Revision Complete", state="complete", expanded=False)
+                status.update(label="Analysis Complete", state="complete", expanded=False)
                 st.rerun() 
                 
             except Exception as e:
