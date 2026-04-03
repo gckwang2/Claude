@@ -23,15 +23,16 @@ STRATEGIC FRAMEWORK (INTERNAL LOGIC):
 - TNL v TNK: Defend against "Dissipation" by proving the "Money Trail" to regulated brokers (IBKR) and household maintenance (Status Quo).
 
 OPERATIONAL PROTOCOLS:
-- THE "CREDIBILITY TRAP": Whenever the Respondent makes a "Bare Allegation" (e.g., Cambodia property), demand the "Substratum of Evidence."
+- THE "CREDIBILITY TRAP": Whenever the Respondent makes a "Bare Allegation" (e.g., Cambodia property), demand the "Substratum of Evidence." 
 - NO LEGAL CITATIONS: Do not mention case names. Write with the "Voice of the Court"—firm, objective, and mathematically driven.
 - BANNED PHRASES: Avoid "I feel" or "I think." Use "The objective evidence confirms..."
 """
 
-# --- 2. CONFIG & IDENTITY (Updated for us-east5 & Claude 3.5 Sonnet) ---
+# --- 2. CONFIG & IDENTITY (Updated for us-east5 & Claude Sonnet 4) ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
 LOCATION = "us-east5" 
-MODEL_ID = "publishers/anthropic/models/claude-3-5-sonnet@20240620" # Vertex AI Model Garden ID
+# Using the specific model name provided
+MODEL_ID = "publishers/anthropic/models/anthropic-claude-sonnet-4" 
 EMBED_MODEL = "text-embedding-004"
 USER_IDENTITY = "Freddy_Legal_Project_2026"
 
@@ -132,13 +133,13 @@ def retrieve_relevant_context(query_text, top_k=3):
         )
         
         context_snippets = [hit.entity.get("text") for hit in results[0]]
-        return "\n\n---\n\n".join(context_snippets) if context_snippets else "No relevant past context."
+        return "\n\n---\n\n".join(context_snippets) if context_snippets else "No relevant past context found."
     except Exception as e:
         return ""
 
 # --- 7. UI SETUP ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
-st.title("⚖️ Principal Legal Advisor (Claude 3.5 Sonnet)")
+st.title("⚖️ Principal Legal Advisor (Claude Sonnet 4)")
 
 if "messages" not in st.session_state:
     raw_history = load_history(USER_IDENTITY)
@@ -168,16 +169,20 @@ for i, entry in enumerate(st.session_state.messages):
         if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
             delete_interaction([entry["u_id"], entry["a_id"]], i)
 
-# --- 9. CHAT ENGINE (Claude 3.5 Sonnet RAG) ---
+# --- 9. CHAT ENGINE (Claude Sonnet 4 RAG) ---
 client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
 if prompt := st.chat_input("Enter your reply affidavit draft..."):
     with st.chat_message("assistant"):
-        with st.status("Analyzing with Claude 3.5 Sonnet...", expanded=True) as status:
+        with st.status(f"Analyzing with {MODEL_ID} in us-east5...", expanded=True) as status:
             try:
+                # STEP 1: RETRIEVE
                 past_context = retrieve_relevant_context(prompt)
-                full_input = f"{LEGAL_PROMPT}\n\n### CONTEXT:\n{past_context}\n\n### DRAFT:\n{prompt}"
+                
+                # STEP 2: AUGMENT
+                full_input = f"{LEGAL_PROMPT}\n\n### CASE CONTEXT:\n{past_context}\n\n### CURRENT DRAFT:\n{prompt}"
 
+                # STEP 3: GENERATE
                 response = client.models.generate_content(
                     model=MODEL_ID,
                     contents=full_input,
@@ -186,6 +191,7 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
                 
                 final_answer = response.text
 
+                # STEP 4: ARCHIVE
                 if final_answer:
                     st.write("💾 Archiving to Zilliz...")
                     u_emb = client.models.embed_content(model=EMBED_MODEL, contents=prompt[:59000]).embeddings[0].values
@@ -205,7 +211,7 @@ if prompt := st.chat_input("Enter your reply affidavit draft..."):
                         "u_id": p_keys[0], "a_id": p_keys[1]
                     })
                     
-                status.update(label="Analysis Complete", state="complete", expanded=False)
+                status.update(label="Strategic Revision Complete", state="complete", expanded=False)
                 st.rerun() 
                 
             except Exception as e:
