@@ -3,7 +3,7 @@ import json
 import os
 import re
 from google import genai
-from google.genai import types
+from google.cloud import aiplatform  # Added for Dedicated Endpoint access
 from pymilvus import connections, Collection, utility, FieldSchema, CollectionSchema, DataType
 
 # --- 1. GLOBAL PROMPT (Elite Singapore Family Law Strategist) ---
@@ -31,8 +31,9 @@ OPERATIONAL PROTOCOLS:
 
 # --- 2. CONFIG & IDENTITY ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
-LOCATION = "global" 
-MODEL_ID = "gemini-3.1-pro-preview"
+LOCATION = "us-central1" 
+# Your specific Endpoint ID from the console
+ENDPOINT_ID = "b72257f8-3872-4ddd-8981-54688cf9c4a5" 
 EMBED_MODEL = "text-embedding-004"
 USER_IDENTITY = "Freddy_Legal_Project_2026"
 
@@ -67,6 +68,11 @@ if "gcp_service_account" in st.secrets:
 else:
     st.error("GCP Service Account credentials missing in secrets!")
     st.stop()
+
+# Initialize Vertex AI for the Dedicated Endpoint
+aiplatform.init(project=PROJECT_ID, location=LOCATION)
+# Client for embeddings (still uses genai for text-embedding-004)
+gemini_client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 
 # --- 5. ZILLIZ & UTILS ---
 @st.cache_resource
@@ -109,28 +115,26 @@ def delete_interaction(ids_to_delete, index_in_state):
         collection.delete(delete_expr)
         collection.flush()
         st.session_state.messages.pop(index_in_state)
-        st.success("Interaction purged from legal memory.")
+        st.success("Interaction purged.")
         st.rerun()
     except Exception as e:
         st.error(f"Deletion failed: {e}")
 
 # --- 6. RAG RETRIEVAL ENGINE ---
 def retrieve_relevant_context(query_text, top_k=3):
-    """Semantic search to pull relevant facts from Zilliz."""
     try:
-        search_emb = client.models.embed_content(
+        search_emb = gemini_client.models.embed_content(
             model=EMBED_MODEL, 
             contents=query_text
         ).embeddings[0].values
         
-        search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
         results = collection.search(
             data=[search_emb], 
             anns_field="vector", 
-            param=search_params, 
+            param={"metric_type": "L2", "params": {"nprobe": 10}}, 
             limit=top_k, 
             output_fields=["text"],
-            expr=f'session_id == "{USER_IDENTITY}"' # Ensure we only pull the user's data
+            expr=f'session_id == "{USER_IDENTITY}"'
         )
         
         context_snippets = [hit.entity.get("text") for hit in results[0]]
@@ -141,7 +145,7 @@ def retrieve_relevant_context(query_text, top_k=3):
 
 # --- 7. UI SETUP ---
 st.set_page_config(page_title="Legal Strategist", layout="wide")
-st.title("⚖️ Principal Legal Advisor")
+st.title("⚖️ Principal Legal Advisor (gpt-oss-120b)")
 
 if "messages" not in st.session_state:
     raw_history = load_history(USER_IDENTITY)
@@ -168,70 +172,59 @@ for i, entry in enumerate(st.session_state.messages):
         st.markdown("---")
         st.markdown("**⚖️ Advisor Strategy:**")
         st.markdown(clean_legal_text(entry['assistant']))
-        
         if st.button(f"🗑️ Delete Interaction {i+1}", key=f"del_{i}"):
             delete_interaction([entry["u_id"], entry["a_id"]], i)
 
-# --- 9. CHAT ENGINE (AUGMENTED GENERATION) ---
-client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
-
+# --- 9. CHAT ENGINE (DEDICATED ENDPOINT) ---
 if prompt := st.chat_input("Enter your reply affidavit draft..."):
     with st.chat_message("assistant"):
-        with st.status("Accessing Legal Memory & Analyzing Lapses...", expanded=True) as status:
+        with st.status("Accessing Legal Memory & Generating Strategy...", expanded=True) as status:
             try:
                 # STEP 1: RETRIEVE
                 past_context = retrieve_relevant_context(prompt)
                 
                 # STEP 2: AUGMENT
-                full_input = f"""
-                {LEGAL_PROMPT}
+                full_prompt = f"{LEGAL_PROMPT}\n\n### CONTEXT:\n{past_context}\n\n### DRAFT:\n{prompt}\n\n### REVISION:"
 
-                ### RELEVANT CASE CONTEXT FROM PREVIOUS INTERACTIONS:
-                {past_context}
-
-                ### CURRENT USER DRAFT TO REVISE:
-                {prompt}
-                """
-
-                # STEP 3: GENERATE
-                response = client.models.generate_content(
-                    model=MODEL_ID,
-                    contents=full_input,
-                    config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(include_thoughts=True), temperature=0.0)
+                # STEP 3: GENERATE via Dedicated Endpoint
+                endpoint = aiplatform.Endpoint(
+                    endpoint_name=f"projects/{PROJECT_ID}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}"
                 )
                 
-                final_answer = ""
-                for part in response.candidates[0].content.parts:
-                    if part.thought:
-                        with st.expander("🔍 INTERNAL GAP ANALYSIS", expanded=True):
-                            st.info(clean_legal_text(part.text))
-                    else:
-                        final_answer += part.text
+                # Note: vLLM deployments usually expect this instances format
+                instances = [{
+                    "prompt": full_prompt,
+                    "max_tokens": 2048,
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                }]
+                
+                response = endpoint.predict(instances=instances)
+                
+                # vLLM responses are typically in response.predictions[0]
+                if response.predictions:
+                    final_answer = response.predictions[0]
+                    # If vLLM returns the full prompt + completion, strip the prompt
+                    if "### REVISION:" in final_answer:
+                        final_answer = final_answer.split("### REVISION:")[-1].strip()
+                else:
+                    final_answer = "Error: No output from model."
 
-                # STEP 4: ARCHIVE (New context becomes searchable for future prompts)
-                if final_answer:
-                    st.write("💾 Archiving to Zilliz...")
-                    safe_final = final_answer[:59000]
-                    safe_prompt = prompt[:59000]
-                    
-                    u_emb = client.models.embed_content(model=EMBED_MODEL, contents=safe_prompt).embeddings[0].values
-                    a_emb = client.models.embed_content(model=EMBED_MODEL, contents=safe_final).embeddings[0].values
-                    
-                    res = collection.insert([
-                        [u_emb, a_emb], 
-                        [safe_prompt, safe_final], 
-                        [USER_IDENTITY, USER_IDENTITY], 
-                        ["user", "assistant"]
-                    ])
-                    collection.flush()
-                    
-                    # Update local state immediately
-                    p_keys = res.primary_keys
-                    st.session_state.messages.append({
-                        "user": prompt, "assistant": final_answer,
-                        "u_id": p_keys[0], "a_id": p_keys[1]
-                    })
-                    
+                st.markdown(clean_legal_text(final_answer))
+
+                # STEP 4: ARCHIVE
+                st.write("💾 Archiving to Zilliz...")
+                u_emb = gemini_client.models.embed_content(model=EMBED_MODEL, contents=prompt[:59000]).embeddings[0].values
+                a_emb = gemini_client.models.embed_content(model=EMBED_MODEL, contents=final_answer[:59000]).embeddings[0].values
+                
+                res = collection.insert([
+                    [u_emb, a_emb], 
+                    [prompt[:59000], final_answer[:59000]], 
+                    [USER_IDENTITY, USER_IDENTITY], 
+                    ["user", "assistant"]
+                ])
+                collection.flush()
+                
                 status.update(label="Strategic Revision Complete", state="complete", expanded=False)
                 st.rerun() 
                 
