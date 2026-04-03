@@ -32,7 +32,7 @@ OPERATIONAL PROTOCOLS:
 # --- 2. CONFIG & IDENTITY ---
 PROJECT_ID = st.secrets["PROJECT_ID"]
 LOCATION = "global" 
-MODEL_ID = "gemini-3.1-pro-preview"
+MODEL_ID = "gemini-3.1-flash-preview"
 EMBED_MODEL = "text-embedding-004"
 USER_IDENTITY = "Freddy_Legal_Project_2026"
 
